@@ -747,6 +747,8 @@ bool WiiUMenuApp::onCreate() {
     m_fastReturnRequested = fastReturn;
     m_fastReturnStartupTick = fastReturn ? initStartTick : 0;
     m_appLoader.setPrefetchIcons(!fastReturn);
+    if (fastReturn)
+        m_iconStreamer.startBurst(1.5f);
 
     const std::string accessibilityVoice = nxui::I18n::instance().activeLanguageTag();
     const int accessibilityRate = m_config.accessibilitySpeechRate;

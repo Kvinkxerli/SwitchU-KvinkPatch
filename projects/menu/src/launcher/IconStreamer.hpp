@@ -1,4 +1,6 @@
 #pragma once
+
+#include <chrono>
 #include <nxui/core/Texture.hpp>
 #include <nxui/core/GpuDevice.hpp>
 #include <nxui/core/Renderer.hpp>
@@ -56,6 +58,11 @@ public:
     void reloadTitle(uint64_t titleId, int currentPage, int iconsPerPage,
                      nxui::GpuDevice& gpu, nxui::Renderer& ren,
                      const std::vector<std::shared_ptr<GlossyIcon>>& allIcons);
+
+    // Temporarily allow more decodes and uploads per frame, e.g. right after a
+    // fast HOME return so the visible page fills in at once instead of one icon
+    // per frame. Reverts to the normal limits by itself.
+    void startBurst(float seconds);
 
     // Release everything (textures + compressed data).
     void clear();
@@ -119,5 +126,9 @@ private:
     static constexpr int kIconSize        = 160;
     static constexpr int kUploadsPerFrame = 1;
     static constexpr int kMaxPendingDecodes = 4;
+    static constexpr int kBurstUploadsPerFrame = 4;
+    static constexpr int kBurstMaxPendingDecodes = 8;
+    std::chrono::steady_clock::time_point m_burstUntil{};
+    bool inBurst() const { return std::chrono::steady_clock::now() < m_burstUntil; }
     static constexpr std::uint64_t kGpuImageReserve = 4u * 1024u * 1024u;
 };
