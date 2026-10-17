@@ -5506,7 +5506,7 @@ void WiiUMenuApp::onUpdateAwake(float dt) {
         m_plusExitPendingTimer = 0.f;
     }
 
-    if (!app().input().isDown(nxui::Button::Plus) || !app().input().isDown(nxui::Button::Minus))
+    if (!app().input().isHeld(nxui::Button::Plus) || !app().input().isHeld(nxui::Button::Minus))
         m_accessibilityToggleComboHeld = false;
 
 #ifdef SWITCHU_MENU
