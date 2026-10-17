@@ -1895,6 +1895,19 @@ void WiiUMenuApp::handleSystemAction(SysAction a) {
             // Physical HOME while already browsing the menu.
             DebugLog::log("[pump] HomeDismiss -> close folder/overlays");
             m_launcher.setAppHasForeground(false);
+            // Like the stock HOME menu: with nothing left to dismiss, HOME goes
+            // back to the suspended game instead of doing nothing.
+            const std::uint64_t suspendedId = m_launcher.suspendedTitleId();
+            if (suspendedId != 0 && m_openFolderId == 0 && !m_editMode &&
+                m_navigator.route() == switchu::navigation::Route::Home &&
+                focusRoot() == &rootBox() &&
+                !(m_launchAnim && m_launchAnim->isPlaying())) {
+                const AppEntry* suspended = m_model.findByTitleId(suspendedId);
+                DebugLog::log("[pump] HomeDismiss -> resume suspended title 0x%016lX",
+                              static_cast<unsigned long>(suspendedId));
+                resumeSuspendedApplication(suspendedId, suspended ? suspended->title : std::string());
+                break;
+            }
             const std::uint32_t folderBefore = m_openFolderId;
             closeActiveOverlays(true);
             if (folderBefore != 0) {
