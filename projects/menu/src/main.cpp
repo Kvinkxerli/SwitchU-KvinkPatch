@@ -3,6 +3,7 @@
 #include "core/DebugLog.hpp"
 #include "core/Config.hpp"
 #include "tutorial/TutorialActivity.hpp"
+#include "screen_fit.hpp"
 #include <nxui/Application.hpp>
 #include <nxui/core/GpuDevice.hpp>
 #include <fmt/format.h>
@@ -43,8 +44,66 @@ extern "C" {
 
     void __nx_win_init(void);
     void __nx_win_exit(void);
+
+    // Weak in libnx (0): __nx_win_init opens this layer instead of creating one.
+    extern u64 __nx_vi_layer_id;
 #endif
 }
+
+namespace switchu::menu {
+
+#ifdef SWITCHU_HOMEBREW
+bool initScreenFitLayer(std::uint64_t) { return false; }
+bool applyScreenUnderscan() { return true; }
+#else
+namespace {
+u64 g_managedLayerId = 0;
+}
+
+bool initScreenFitLayer(std::uint64_t managedLayerId) {
+    if (managedLayerId == 0)
+        return false;
+    g_managedLayerId = managedLayerId;
+    return applyScreenUnderscan();
+}
+
+bool applyScreenUnderscan() {
+    if (g_managedLayerId == 0)
+        return false;
+
+    // Underscan is a TV concern: in handheld the layer is already exactly
+    // 1280x720 and must stay untouched.
+    if (appletGetOperationMode() != AppletOperationMode_Console)
+        return true;
+
+    constexpr s32 kFullW = 1920;
+    constexpr s32 kFullH = 1080;
+
+    u32 underscan = 100;
+    SetSysTvSettings tv{};
+    if (R_SUCCEEDED(setsysGetTvSettings(&tv)) && tv.underscan >= 1 && tv.underscan <= 100)
+        underscan = tv.underscan;
+
+    const s32 w = kFullW * static_cast<s32>(underscan) / 100;
+    const s32 h = kFullH * static_cast<s32>(underscan) / 100;
+
+    ViLayer layer{};
+    layer.initialized = true;
+    layer.layer_id = g_managedLayerId;
+
+    const Result rc = viSetLayerSize(&layer, w, h);
+    if (R_SUCCEEDED(rc)) {
+        viSetLayerPosition(&layer, static_cast<float>(kFullW - w) / 2.f,
+                           static_cast<float>(kFullH - h) / 2.f);
+    }
+
+    DebugLog::log("[menu] underscan=%u%% -> layer %dx%d centered rc=0x%X",
+                  underscan, w, h, rc);
+    return R_SUCCEEDED(rc);
+}
+#endif
+
+} // namespace switchu::menu
 
 #ifndef SWITCHU_HOMEBREW
 namespace {
@@ -159,8 +218,19 @@ extern "C" void __appInit(void) {
     else
         DebugLog::log("[menu] nsInitialize OK");
 
+    // A library applet's managed layer is left at 1280x720 by libnx, so docked
+    // the UI sat unscaled in the middle of the 1080p output. Open the managed
+    // layer ourselves (its id is needed) and point libnx's default window at it,
+    // then size it to the output, applying the console's TV underscan setting.
+    u64 managedLayerId = 0;
+    if (R_SUCCEEDED(appletCreateManagedDisplayLayer(&managedLayerId)))
+        __nx_vi_layer_id = managedLayerId;
+
     __nx_win_init();
     DebugLog::log("[menu] __nx_win_init done");
+
+    if (managedLayerId)
+        switchu::menu::initScreenFitLayer(managedLayerId);
 
     svcOutputDebugString("[SwitchU-menu] __appInit done", 29);
 }

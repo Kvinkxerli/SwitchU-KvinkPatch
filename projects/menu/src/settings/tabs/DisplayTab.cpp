@@ -1,4 +1,5 @@
 #include "TabBuilders.hpp"
+#include "screen_fit.hpp"
 #include <nxui/core/I18n.hpp>
 #include <switch.h>
 #include <algorithm>
@@ -104,24 +105,30 @@ SettingsScreen::Tab settings::tabs::DisplayTab::build(SettingsScreen& screen) {
         t.items.push_back(std::move(it));
     }
 
-    // {
-    //     SettingItem it; it.label = i18n.tr("settings.display.tv_screen_size", "TV Screen Size"); it.type = ItemType::Slider;
-    //     it.description = i18n.tr("settings.display.tv_screen_size_desc", "Adjust overscan so the full image is visible.");
-    //     SetSysTvSettings tv{};
-    //     if (R_SUCCEEDED(setsysGetTvSettings(&tv)))
-    //         it.floatVal = tv.underscan / 100.f;
-    //     else
-    //         it.floatVal = 1.f;
-    //     it.anim01 = std::clamp(it.floatVal, 0.f, 1.f);
-    //     it.onChange = [](SettingItem& self) {
-    //         SetSysTvSettings tv{};
-    //         if (R_SUCCEEDED(setsysGetTvSettings(&tv))) {
-    //             tv.underscan = (u32)(self.floatVal * 100.f);
-    //             setsysSetTvSettings(&tv);
-    //         }
-    //     };
-    //     t.items.push_back(std::move(it));
-    // }
+    {
+        SettingItem it; it.label = i18n.tr("settings.display.tv_screen_size", "TV Screen Size"); it.type = ItemType::Slider;
+        it.description = i18n.tr("settings.display.tv_screen_size_desc", "Adjust overscan so the full image is visible.");
+        // The slider spans 60%..100%; anything below is never useful for a TV.
+        u32 underscan = 100;
+        SetSysTvSettings tv{};
+        if (R_SUCCEEDED(setsysGetTvSettings(&tv)) && tv.underscan >= 60 && tv.underscan <= 100)
+            underscan = tv.underscan;
+        it.floatVal = static_cast<float>(underscan - 60) / 40.f;
+        it.anim01 = std::clamp(it.floatVal, 0.f, 1.f);
+        it.sliderSteps = 40;
+        it.onChange = [](SettingItem& self) {
+            const u32 percent = 60u + std::clamp(static_cast<u32>(self.floatVal * 40.f + 0.5f), 0u, 40u);
+            SetSysTvSettings tv{};
+            if (R_SUCCEEDED(setsysGetTvSettings(&tv))) {
+                tv.underscan = percent;
+                setsysSetTvSettings(&tv);
+            }
+            // Resize the managed layer now so the result is visible immediately,
+            // without waiting for a re-dock (like qlaunch's live preview).
+            switchu::menu::applyScreenUnderscan();
+        };
+        t.items.push_back(std::move(it));
+    }
 
     {
         SettingItem it; it.label = i18n.tr("settings.display.album_storage", "Primary Album Storage"); it.type = ItemType::Selector;
