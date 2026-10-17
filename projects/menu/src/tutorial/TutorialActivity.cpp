@@ -464,6 +464,20 @@ void TutorialActivity::onUpdate(float dt) {
     if (m_steps.empty())
         return;
 
+    // The typewriter caches one text texture per character; nothing else trims
+    // these fonts, so once full the body text silently stops drawing. Trim
+    // here, before the next frame is recorded, like WiiUMenuApp does.
+    nxui::Font* fonts[] = {&m_fontTitle, &m_fontBody, &m_fontSmall};
+    bool trimRequested = false;
+    for (auto* font : fonts)
+        trimRequested = trimRequested || font->maintenanceRequested();
+    if (trimRequested) {
+        app().gpu().waitIdle();
+        for (auto* font : fonts)
+            font->trimCache(font->cacheEntryCount() / 2, font->cacheBytes() / 2);
+        app().renderer().reclaimReleasedTextureSlotsAfterIdle();
+    }
+
     if (m_finishing) {
         m_finishTimer += dt;
         m_transitionAlpha = std::clamp(m_finishTimer / 0.28f, 0.f, 1.f);
