@@ -23,8 +23,8 @@ float applyGyroDeadzone(float value) {
 } // namespace
 
 void Input::initialize() {
-    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-    padInitializeDefault(&m_pad);
+    padConfigureInput(8, HidNpadStyleSet_NpadStandard);
+    padInitializeAny(&m_pad);
     hidInitializeTouchScreen();
 
     recenterVirtualPointer();
