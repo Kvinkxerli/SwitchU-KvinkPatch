@@ -657,6 +657,8 @@
     "options": {
       "action_hints": "Indications d’action",
       "action_hints_desc": "Choisissez l’apparence des commandes contextuelles en bas à droite.",
+      "sort_large_tiles": "Trier aussi les grandes tuiles",
+      "sort_large_tiles_desc": "A-Z et Récents déplacent aussi les applications avec une tuile plus grande.",
       "hint_panel": "Panneau",
       "hint_capsules": "Capsules"
     },

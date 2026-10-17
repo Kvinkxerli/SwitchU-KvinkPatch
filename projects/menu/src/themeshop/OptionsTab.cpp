@@ -96,6 +96,21 @@ ThemeShopScreen::Tab themeshop::tabs::OptionsTab::build(ThemeShopScreen& screen)
 
     {
         SettingItem it;
+        it.label = i18n.tr("themeshop.options.sort_large_tiles", "Sort Large Tiles Too");
+        it.description = i18n.tr("themeshop.options.sort_large_tiles_desc",
+                                 "A-Z and Recent also move applications that use a larger tile size.");
+        it.type = ItemType::Toggle;
+        it.boolVal = screen.m_sortLargeTiles;
+        it.anim01 = it.boolVal ? 1.f : 0.f;
+        it.onChange = [&screen](SettingItem& self) {
+            screen.m_sortLargeTiles = self.boolVal;
+            if (screen.m_sortLargeTilesCb) screen.m_sortLargeTilesCb(self.boolVal);
+        };
+        t.items.push_back(std::move(it));
+    }
+
+    {
+        SettingItem it;
         it.label = i18n.tr("themeshop.options.action_hints", "Action Hints");
         it.description = i18n.tr("themeshop.options.action_hints_desc",
                                  "Choose how contextual controls appear in the bottom-right corner.");

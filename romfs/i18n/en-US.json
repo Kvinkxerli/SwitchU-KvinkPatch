@@ -691,6 +691,8 @@
     "options": {
       "action_hints": "Action Hints",
       "action_hints_desc": "Choose how contextual controls appear in the bottom-right corner.",
+      "sort_large_tiles": "Sort Large Tiles Too",
+      "sort_large_tiles_desc": "A-Z and Recent also move applications that use a larger tile size.",
       "hint_panel": "Panel",
       "hint_capsules": "Capsules"
     },

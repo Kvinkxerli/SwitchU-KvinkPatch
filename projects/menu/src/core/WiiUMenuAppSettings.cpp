@@ -1543,6 +1543,7 @@ void WiiUMenuApp::createThemeShop() {
     m_themeShop->setMusicState(m_audio.isPlaying(), m_audio.volume(), m_audio.sfxVolume());
     m_themeShop->setGridLayoutState(m_config.gridColumns, m_config.gridRows);
     m_themeShop->setActionHintStyleState(m_config.actionHintStyle);
+    m_themeShop->setSortLargeTilesState(m_config.sortLargeTiles);
     refreshAutoThemeSummary();
     m_themeShop->setCursorMotionModeState(m_config.cursorMotionMode);
     m_themeShop->setPageTransitionModeState(m_config.pageTransitionMode);
@@ -1590,6 +1591,13 @@ void WiiUMenuApp::createThemeShop() {
     });
     m_themeShop->onActionHintStyleChange([this](int style) {
         m_config.actionHintStyle = style == 0 ? "panel" : "capsules";
+    });
+    m_themeShop->onSortLargeTilesChange([this](bool enabled) {
+        if (m_config.sortLargeTiles == enabled)
+            return;
+        m_config.sortLargeTiles = enabled;
+        m_config.save();
+        reflowHomeGrid();
     });
     m_themeShop->onAutoThemeOpen([this]() { openAutoThemeSettings(); });
     m_themeShop->onCursorMotionModeChange([this](int mode) {

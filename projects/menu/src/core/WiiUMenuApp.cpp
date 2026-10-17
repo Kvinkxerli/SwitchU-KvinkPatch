@@ -1731,6 +1731,10 @@ GridModel WiiUMenuApp::buildRootFolderModel() {
     std::vector<std::uint64_t> projected;
     if (m_config.sortMode != 0 && m_appLayoutMode == AppLayoutMode::Grid) {
         const int columns = std::clamp(m_config.gridColumns, 1, 8);
+        const int gridRows = std::clamp(m_config.gridRows, 1, 5);
+        // With sortLargeTiles, applications that use a bigger tile also join
+        // the order instead of staying anchored where they were placed.
+        const bool sortLarge = m_config.sortLargeTiles;
         projected.assign(m_layoutSlots.size(), 0);
         std::vector<bool> reserved(m_layoutSlots.size(), false);
 
@@ -1738,8 +1742,9 @@ GridModel WiiUMenuApp::buildRootFolderModel() {
             const auto stored = m_layoutSlots[index];
             const auto found = entries.find(stored);
             const bool movableApplication = found != entries.end() &&
-                found->second.isApplication() && found->second.widgetColumns == 1 &&
-                found->second.widgetRows == 1;
+                found->second.isApplication() &&
+                (sortLarge || (found->second.widgetColumns == 1 &&
+                               found->second.widgetRows == 1));
             if (stored == 0 || found == entries.end() || movableApplication)
                 continue;
             projected[index] = stored;
@@ -1763,8 +1768,9 @@ GridModel WiiUMenuApp::buildRootFolderModel() {
         std::vector<std::uint64_t> applications;
         applications.reserve(entries.size());
         for (const auto& pair : entries) {
-            if (pair.second.isApplication() && pair.second.widgetColumns == 1 &&
-                pair.second.widgetRows == 1)
+            if (pair.second.isApplication() &&
+                (sortLarge || (pair.second.widgetColumns == 1 &&
+                               pair.second.widgetRows == 1)))
                 applications.push_back(pair.first);
         }
         std::sort(applications.begin(), applications.end(),
@@ -1799,12 +1805,48 @@ GridModel WiiUMenuApp::buildRootFolderModel() {
             return leftTitle.size() < rightTitle.size();
         });
 
-        std::size_t next = 0;
-        for (std::size_t index = 0;
-             index < projected.size() && next < applications.size(); ++index) {
-            if (!reserved[index]) projected[index] = applications[next++];
+        if (sortLarge) {
+            // First fit: each application takes the first spot where its whole
+            // tile fits inside one page; new pages are appended when needed.
+            auto fitsAt = [&](std::size_t index, int spanColumns, int spanRows) {
+                const int local = static_cast<int>(index % static_cast<std::size_t>(perPage));
+                if (local % columns + spanColumns > columns ||
+                    local / columns + spanRows > gridRows)
+                    return false;
+                for (int dy = 0; dy < spanRows; ++dy) {
+                    for (int dx = 0; dx < spanColumns; ++dx) {
+                        const std::size_t cell = index +
+                            static_cast<std::size_t>(dy * columns + dx);
+                        if (cell >= reserved.size() || reserved[cell]) return false;
+                    }
+                }
+                return true;
+            };
+            for (const auto id : applications) {
+                const auto& entry = entries.at(id);
+                const int spanColumns = std::clamp(entry.widgetColumns, 1, columns);
+                const int spanRows = std::clamp(entry.widgetRows, 1, gridRows);
+                for (std::size_t index = 0;; ++index) {
+                    if (index >= projected.size()) {
+                        projected.resize(projected.size() + static_cast<std::size_t>(perPage), 0);
+                        reserved.resize(projected.size(), false);
+                    }
+                    if (!fitsAt(index, spanColumns, spanRows)) continue;
+                    projected[index] = id;
+                    for (int dy = 0; dy < spanRows; ++dy)
+                        for (int dx = 0; dx < spanColumns; ++dx)
+                            reserved[index + static_cast<std::size_t>(dy * columns + dx)] = true;
+                    break;
+                }
+            }
+        } else {
+            std::size_t next = 0;
+            for (std::size_t index = 0;
+                 index < projected.size() && next < applications.size(); ++index) {
+                if (!reserved[index]) projected[index] = applications[next++];
+            }
+            while (next < applications.size()) projected.push_back(applications[next++]);
         }
-        while (next < applications.size()) projected.push_back(applications[next++]);
     }
     const auto& displaySlots = projected.empty() ? m_layoutSlots : projected;
 

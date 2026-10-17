@@ -46,6 +46,7 @@ public:
     void onGridColumnsChange(IntCb cb)   { m_gridColumnsCb = std::move(cb); }
     void onGridRowsChange(IntCb cb)      { m_gridRowsCb = std::move(cb); }
     void onActionHintStyleChange(IntCb cb) { m_actionHintStyleCb = std::move(cb); }
+    void onSortLargeTilesChange(BoolCb cb) { m_sortLargeTilesCb = std::move(cb); }
     void onAutoThemeOpen(VoidCb cb) { m_autoThemeOpenCb = std::move(cb); }
     void onCursorMotionModeChange(IntCb cb) { m_cursorMotionModeCb = std::move(cb); }
     void onPageTransitionModeChange(IntCb cb) { m_pageTransitionModeCb = std::move(cb); }
@@ -67,6 +68,7 @@ public:
         m_gridColumns = std::clamp(columns, 1, 8);
         m_gridRows = std::clamp(rows, 1, 5);
     }
+    void setSortLargeTilesState(bool enabled) { m_sortLargeTiles = enabled; }
     void setActionHintStyleState(const std::string& style) {
         m_actionHintStyle = style == "panel" ? 0 : 1;
     }
@@ -214,6 +216,7 @@ private:
     IntCb m_gridColumnsCb;
     IntCb m_gridRowsCb;
     IntCb m_actionHintStyleCb;
+    BoolCb m_sortLargeTilesCb;
     VoidCb m_autoThemeOpenCb;
     IntCb m_cursorMotionModeCb;
     IntCb m_pageTransitionModeCb;
@@ -231,6 +234,7 @@ private:
     int m_gridColumns = 5;
     int m_gridRows = 3;
     int m_actionHintStyle = 1;
+    bool m_sortLargeTiles = true;
     std::string m_autoThemeSummary;
     int m_cursorMotionMode = 0;
     int m_pageTransitionMode = 0;
