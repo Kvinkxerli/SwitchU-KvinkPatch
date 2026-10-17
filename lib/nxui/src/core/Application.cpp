@@ -123,11 +123,26 @@ void Application::dispatchInput() {
         if (m_input.isDown(button)) pressedMask |= bit;
     }
 
+    constexpr uint64_t kStickMask =
+        static_cast<uint64_t>(Button::LStickL) | static_cast<uint64_t>(Button::LStickR) |
+        static_cast<uint64_t>(Button::LStickU) | static_cast<uint64_t>(Button::LStickD) |
+        static_cast<uint64_t>(Button::RStickL) | static_cast<uint64_t>(Button::RStickR) |
+        static_cast<uint64_t>(Button::RStickU) | static_cast<uint64_t>(Button::RStickD);
+    // Circling the stick changes the held direction every few frames and each
+    // change used to be an immediate step. For the stick alone, a direction
+    // change only moves again after a short gap since the last step.
+    constexpr int kStickMinStepFrames = 10;
+    if (m_navSinceStepFrames < 1000) ++m_navSinceStepFrames;
+    const bool stickOnly = heldMask != 0 && (heldMask & ~kStickMask) == 0;
+
     bool dispatchNavigation = false;
     if (heldMask == 0) {
         m_navHeldMask = 0;
         m_navHeldFrames = 0;
         m_navRepeatCountdown = 0;
+    } else if ((pressedMask != 0 || heldMask != m_navHeldMask) && stickOnly &&
+               m_navSinceStepFrames < kStickMinStepFrames) {
+        m_navHeldMask = heldMask;
     } else if (pressedMask != 0 || heldMask != m_navHeldMask) {
         // The first step is immediate, followed by a deliberate pause. This
         // keeps a normal press precise and makes the start of a hold calmer.
@@ -143,11 +158,16 @@ void Application::dispatchInput() {
             dispatchNavigation = true;
             // Accelerate one step per second from ~5 moves/s to ~10 moves/s.
             // The cap leaves enough time for artwork streaming to catch up.
-            m_navRepeatCountdown = std::clamp(12 - m_navHeldFrames / 60, 6, 12);
+            // A held analog stick is much easier to overshoot with than the
+            // D-pad, so it repeats about 1.6x slower (~4 to ~7 moves/s).
+            m_navRepeatCountdown = (heldMask & ~kStickMask) == 0
+                ? std::clamp(19 - m_navHeldFrames / 60, 10, 19)
+                : std::clamp(12 - m_navHeldFrames / 60, 6, 12);
         }
     }
 
     if (dispatchNavigation) {
+        m_navSinceStepFrames = 0;
 
         Widget* cur = fm.current();
         auto tryDir = [&](Button dpad, Button leftStick, Button rightStick, FocusDirection dir) {

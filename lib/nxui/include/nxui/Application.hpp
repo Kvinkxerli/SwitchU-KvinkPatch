@@ -73,6 +73,7 @@ private:
     uint64_t m_navHeldMask = 0;
     int m_navHeldFrames = 0;
     int m_navRepeatCountdown = 0;
+    int m_navSinceStepFrames = 1000;
 };
 
 } // namespace nxui
