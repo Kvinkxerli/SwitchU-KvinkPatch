@@ -1780,7 +1780,10 @@ static void mainLoop() {
                              (uint32_t)g_eventGcMountRc.load());
         }
     }
-    if (g_batteryRefreshPending.exchange(false)) {
+    // Keep the request until a menu is actually there to receive it: consuming
+    // it earlier left a freshly started menu showing 0 % with no charge icon.
+    if (g_batteryRefreshPending.load() && daemon::menu_la::isActive()) {
+        g_batteryRefreshPending.store(false);
         pushBatteryStatusNotification(true);
     }
 
