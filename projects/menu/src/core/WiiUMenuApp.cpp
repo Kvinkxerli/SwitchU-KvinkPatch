@@ -35,6 +35,31 @@
 
 namespace {
 
+// First empty slot not covered by a multi-cell tile anchored earlier (those
+// cells also hold 0). Returns slots.size() when none is free.
+template <typename SpanOf>
+std::size_t firstFreeSlot(const std::vector<std::uint64_t>& slots, int columns,
+                          int perPage, bool grid, SpanOf spanOf) {
+    std::vector<bool> covered(slots.size(), false);
+    if (grid) {
+        for (std::size_t index = 0; index < slots.size(); ++index) {
+            if (slots[index] == 0) continue;
+            const auto [spanColumns, spanRows] = spanOf(slots[index]);
+            if (spanColumns <= 1 && spanRows <= 1) continue;
+            const int local = static_cast<int>(index) % perPage;
+            if (local % columns + spanColumns > columns) continue;
+            for (int dy = 0; dy < spanRows; ++dy)
+                for (int dx = 0; dx < spanColumns; ++dx) {
+                    const std::size_t cell = index + static_cast<std::size_t>(dy * columns + dx);
+                    if (cell < covered.size()) covered[cell] = true;
+                }
+        }
+    }
+    for (std::size_t index = 0; index < slots.size(); ++index)
+        if (slots[index] == 0 && !covered[index]) return index;
+    return slots.size();
+}
+
 #ifdef SWITCHU_MENU
 std::optional<std::uint64_t> queryApplicationPlaytimeSeconds(std::uint64_t titleId) {
     if (titleId == 0) return std::nullopt;
@@ -1518,9 +1543,17 @@ void WiiUMenuApp::composeRootPending(std::vector<PendingApp>& apps) {
         if (itemId == 0 || placed.count(itemId))
             continue;
 
-        auto emptyIt = std::find(slots.begin(), slots.end(), 0);
-        if (emptyIt != slots.end())
-            *emptyIt = itemId;
+        const std::size_t free = firstFreeSlot(
+            slots, cols, perPage, m_appLayoutMode == AppLayoutMode::Grid,
+            [&](std::uint64_t id) {
+                auto it = byId.find(id);
+                return it == byId.end()
+                    ? std::pair<int, int>{1, 1}
+                    : std::pair<int, int>{std::max(1, it->second.widgetColumns),
+                                          std::max(1, it->second.widgetRows)};
+            });
+        if (free < slots.size())
+            slots[free] = itemId;
         else
             slots.push_back(itemId);
 
@@ -1668,9 +1701,18 @@ GridModel WiiUMenuApp::buildRootFolderModel() {
     }
     for (const auto& pair : entries) {
         if (std::find(m_layoutSlots.begin(), m_layoutSlots.end(), pair.first) == m_layoutSlots.end()) {
-            auto empty = std::find(m_layoutSlots.begin(), m_layoutSlots.end(), 0);
-            if (empty == m_layoutSlots.end()) m_layoutSlots.push_back(pair.first);
-            else *empty = pair.first;
+            const std::size_t free = firstFreeSlot(
+                m_layoutSlots, std::clamp(m_config.gridColumns, 1, 8), perPage,
+                m_appLayoutMode == AppLayoutMode::Grid,
+                [&](std::uint64_t id) {
+                    auto it = entries.find(id);
+                    return it == entries.end()
+                        ? std::pair<int, int>{1, 1}
+                        : std::pair<int, int>{std::max(1, it->second.widgetColumns),
+                                              std::max(1, it->second.widgetRows)};
+                });
+            if (free >= m_layoutSlots.size()) m_layoutSlots.push_back(pair.first);
+            else m_layoutSlots[free] = pair.first;
             m_layoutDirty = true;
         }
     }
