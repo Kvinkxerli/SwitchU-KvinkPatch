@@ -36,6 +36,10 @@ struct MusicTrackInfo {
     std::string title;
     std::string artist;
     float durationSeconds = 0.f;
+    // True when duration comes from Xing/Info frames, ID3 TLEN, or a
+    // non-MP3 container. False for bitrate-guessed MP3 lengths — those are
+    // unsafe inputs for Mix_SetMusicPosition on Switch.
+    bool seekReliable = false;
     std::vector<uint8_t> coverArt; // JPEG/PNG bytes from ID3 APIC when present
 
     std::string displayTitle() const {
@@ -98,9 +102,27 @@ public:
     void seekTo(float seconds);
     const std::vector<uint8_t>& currentCoverArt() const;
 
-    void restorePlaybackState(int trackIndex, float positionSeconds, bool playing);
+    /// Resume by stable track key when possible. If the saved track is gone
+    /// (user deleted/renamed files), starts from the first remaining track at 0
+    /// instead of seeking into a different file at the old index/position —
+    /// Mix_SetMusicPosition into the wrong MP3 can hang SDL_mixer on Switch.
+    void restorePlaybackState(int trackIndex,
+                              float positionSeconds,
+                              bool playing,
+                              const std::string& trackKey = {});
     /// Apply a deferred Mix_SetMusicPosition after HOME is interactive.
+    /// No-ops while warm-up frames remain or nothing is pending.
     void updateDeferredSeek();
+    bool hasDeferredSeek() const { return m_deferredSeekSeconds >= 0.f; }
+
+    /// Current track's playlist key, or empty if none.
+    std::string currentTrackKey() const;
+    /// Drop stale playlist keys and rewrite index/key/position when the saved
+    /// resume target is no longer on disk. Returns true if config fields changed.
+    bool reconcileResumeConfig(int& trackIndex,
+                               float& positionSeconds,
+                               std::string& trackKey,
+                               std::vector<std::string>& playlistOrder) const;
 
     void loadSfx(Sfx id, const std::string& path);
     void clearSfx();
@@ -119,8 +141,17 @@ private:
     void rebuildShuffleOrder(bool keepCurrent);
     int nextIndexInOrder(int from) const;
     int prevIndexInOrder(int from) const;
+    int findTrackIndexByKeyUnlocked(const std::string& trackKey) const;
+    float sanitizeSeekSecondsForDuration(float positionSeconds, float durationSeconds) const;
+    float sanitizeSeekSecondsUnlocked(float positionSeconds) const;
+    /// Resume-only sanitizer: drops unreliable / deep MP3 hard-seeks that can
+    /// freeze SDL_mixer on Switch, while keeping shallow mid-track resume.
+    float sanitizeResumeSeekUnlocked(float positionSeconds) const;
+    bool currentTrackFileExistsUnlocked() const;
+    bool currentTrackIsMp3Unlocked() const;
     static std::string cleanedFilenameTitle(const std::string& filename);
     static void readMp3Metadata(const std::string& path, MusicTrackInfo& info);
+    static bool pathLooksLikeMp3(const std::string& path);
 
     std::mutex m_trackMutex;
     std::vector<Mix_Music*> m_tracks;
@@ -132,6 +163,7 @@ private:
     float m_musicFade = 1.f;
     float m_positionSeconds = 0.f;
     float m_deferredSeekSeconds = -1.f;
+    int   m_deferredSeekWarmupFrames = 0;
     bool  m_restoreFadeIn = false;
     std::atomic<bool> m_playing{false};
     bool  m_paused = false;

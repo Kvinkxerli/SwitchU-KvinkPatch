@@ -4744,6 +4744,7 @@ void WiiUMenuApp::loadSoundPreset(const std::string& preset) {
 
 void WiiUMenuApp::persistMusicPlaybackState(bool updateEnabledFlag) {
     m_config.musicTrackIndex = m_audio.currentIndex();
+    m_config.musicTrackKey = m_audio.currentTrackKey();
     m_config.musicPositionSeconds = m_audio.positionSeconds();
     m_config.musicShuffle = m_audio.shuffle();
     m_config.musicRepeatMode = static_cast<int>(m_audio.repeatMode());
@@ -5357,20 +5358,43 @@ void WiiUMenuApp::onUpdateAwake(float dt) {
         if (m_audioPlaybackRestoreDelayFrames == 0) {
             DebugLog::log("[boot] restoring music playback");
             m_audioPlaybackRestorePending = false;
+            if (m_audio.reconcileResumeConfig(m_config.musicTrackIndex,
+                                              m_config.musicPositionSeconds,
+                                              m_config.musicTrackKey,
+                                              m_config.musicPlaylistOrder)) {
+                DebugLog::log(
+                    "[boot] music resume config reconciled key=%s index=%d pos=%.2f order=%zu",
+                    m_config.musicTrackKey.c_str(),
+                    m_config.musicTrackIndex,
+                    m_config.musicPositionSeconds,
+                    m_config.musicPlaylistOrder.size());
+                if (!m_config.musicPlaylistOrder.empty())
+                    m_audio.applyPlaylistOrder(m_config.musicPlaylistOrder);
+                m_config.save();
+            }
+            DebugLog::log(
+                "[boot] music restore target key=%s index=%d pos=%.2f enabled=%d",
+                m_config.musicTrackKey.c_str(),
+                m_config.musicTrackIndex,
+                m_config.musicPositionSeconds,
+                m_config.musicEnabled ? 1 : 0);
             m_audio.restorePlaybackState(m_config.musicTrackIndex,
                                          m_config.musicPositionSeconds,
-                                         m_config.musicEnabled);
-            // Seek + unmute immediately — splash/deferred uploads are already done.
-            m_audio.updateDeferredSeek();
-            m_audioSeekAfterHoldoff = false;
-            DebugLog::log("[boot] music playback restore returned");
+                                         m_config.musicEnabled,
+                                         m_config.musicTrackKey);
+            // Hard seeks run from AudioManager::update after a short warm-up so
+            // Mix_SetMusicPosition is not on the splash/GPU-upload frame (deep
+            // MP3 seeks have frozen AppletReturn). Unsafe seeks are dropped
+            // inside sanitizeResumeSeekUnlocked — resume still picks the track.
+            m_audioSeekAfterHoldoff = m_audio.hasDeferredSeek();
+            DebugLog::log("[boot] music playback restore returned deferredSeek=%d",
+                          m_audio.hasDeferredSeek() ? 1 : 0);
         }
     } else if (m_audioSeekAfterHoldoff
-               && !leaveSplashActive()) {
-        DebugLog::log("[boot] applying deferred music seek");
+               && !leaveSplashActive()
+               && !m_audio.hasDeferredSeek()) {
+        DebugLog::log("[boot] deferred music seek settled");
         m_audioSeekAfterHoldoff = false;
-        m_audio.updateDeferredSeek();
-        DebugLog::log("[boot] deferred music seek returned");
     }
 
     if (m_audioInitPending) {
@@ -5434,6 +5458,7 @@ void WiiUMenuApp::onUpdateAwake(float dt) {
         m_audio.restorePlaybackState(0, 0.f, m_config.musicEnabled);
         m_config.musicTrackIndex = 0;
         m_config.musicPositionSeconds = 0.f;
+        m_config.musicTrackKey = m_audio.currentTrackKey();
         m_audioSeekAfterHoldoff = false;
         m_loadedSoundPreset = m_pendingSoundPreset.empty() ? resolveSoundPresetId(m_config.soundPreset)
                                                            : m_pendingSoundPreset;

@@ -55,6 +55,7 @@ bool AppConfig::load() {
     readJsonOpt(j, "musicVolume", musicVolume);
     readJsonOpt(j, "sfxVolume", sfxVolume);
     readJsonOpt(j, "musicTrackIndex", musicTrackIndex);
+    readJsonOpt(j, "musicTrackKey", musicTrackKey);
     readJsonOpt(j, "musicPositionSeconds", musicPositionSeconds);
     readJsonOpt(j, "musicShuffle", musicShuffle);
     readJsonOpt(j, "musicRepeatMode", musicRepeatMode);
@@ -189,6 +190,7 @@ bool AppConfig::save() const {
     j["musicVolume"] = musicVolume;
     j["sfxVolume"] = sfxVolume;
     j["musicTrackIndex"] = musicTrackIndex;
+    j["musicTrackKey"] = musicTrackKey;
     j["musicPositionSeconds"] = musicPositionSeconds;
     j["musicShuffle"] = musicShuffle;
     j["musicRepeatMode"] = std::clamp(musicRepeatMode, 0, 2);

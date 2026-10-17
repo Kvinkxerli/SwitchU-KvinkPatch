@@ -11,6 +11,9 @@ struct AppConfig {
     float musicVolume  = 0.4f;
     float sfxVolume    = 0.7f;
     int   musicTrackIndex = 0;
+    // Stable id ("track.mp3" or "Album/track.mp3"). Preferred over musicTrackIndex
+    // when users add/remove/reorder files between boots.
+    std::string musicTrackKey;
     float musicPositionSeconds = 0.f;
     bool  musicShuffle = false;
     int   musicRepeatMode = 1; // MusicRepeatMode::All
