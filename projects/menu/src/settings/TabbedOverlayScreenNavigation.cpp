@@ -537,18 +537,13 @@ void TabbedOverlayScreen::onNavRight() {
         if (item.onChange) item.onChange(item);
         if (m_sliderSfxCb) m_sliderSfxCb(true);
         announceCurrentValue();
-    } else if (item.type == ItemType::Selector) {
-        openDropdown(rawIdx);
-        if (m_activateSfxCb) m_activateSfxCb();
-        announceCurrentFocus();
     } else if (item.type == ItemType::Action) {
+        // Right only moves between the row's buttons. Opening a selector or
+        // running an action is A's job: doing it here made a held stick open
+        // and close dropdowns (or fire the action) over and over.
         if (item.hasSecondaryAction() && item.actionButtonFocus == 0) {
             item.actionButtonFocus = 1;
             if (m_navSfxCb) m_navSfxCb();
-            announceCurrentFocus();
-        } else if (!item.hasSecondaryAction()) {
-            if (item.onChange) item.onChange(item);
-            if (m_activateSfxCb) m_activateSfxCb();
             announceCurrentFocus();
         }
     }
