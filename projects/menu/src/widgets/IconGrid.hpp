@@ -33,6 +33,10 @@ public:
     void setLayoutMode(AppLayoutMode mode);
     AppLayoutMode layoutMode() const { return m_layoutMode; }
     bool isDynamicLine() const { return m_layoutMode == AppLayoutMode::DynamicLine; }
+    // Vertical centre of the single-row carousel as a fraction of the grid
+    // rect. 0.5 puts the focused icon on the middle of the screen (the grid
+    // rect is symmetric about y = 360). Shared with the folder plate geometry.
+    static constexpr float kLineCenterFraction = 0.5f;
     bool isDynamicLineScrolling() const;
     bool isLayoutMorphing() const { return m_layoutMorphing; }
     void setDynamicLineUpTarget(nxui::Widget* target);

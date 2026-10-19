@@ -12,9 +12,29 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
 #include <vector>
 
 namespace {
+
+// Replaces the first "{}" placeholders (in order) with the given values, so
+// translations can reorder words around them.
+std::string fillPlaceholders(std::string text, std::initializer_list<std::string> values) {
+    std::size_t from = 0;
+    for (const auto& value : values) {
+        const std::size_t at = text.find("{}", from);
+        if (at == std::string::npos)
+            break;
+        text.replace(at, 2, value);
+        from = at + value.size();
+    }
+    return text;
+}
+
+inline std::string pickerText(const char* key, const char* fallback) {
+    return nxui::I18n::instance().tr(key, fallback);
+}
+
 constexpr int kColumns = 4;
 constexpr int kRows = 3;
 constexpr int kPerPage = kColumns * kRows;
@@ -129,7 +149,7 @@ void SteamGridDbPickerScreen::showLoading(std::uint64_t titleId,
     m_selected = 0;
     m_loading = true;
     m_pickingGame = false;
-    m_message = "Searching SteamGridDB...";
+    m_message = pickerText("settings.steamgriddb.download_start", "Searching SteamGridDB...");
     m_active = true;
     setVisible(true);
 }
@@ -143,8 +163,9 @@ void SteamGridDbPickerScreen::showGameList(const std::vector<GameMatch>& matches
     m_result.gameMatches = matches;
     m_result.success = !matches.empty();
     m_message = matches.empty()
-        ? "No games found"
-        : std::to_string(matches.size()) + " games — pick one";
+        ? pickerText("sgdb_picker.no_games", "No games found")
+        : fillPlaceholders(pickerText("sgdb_picker.games_pick", "{} games — pick one"),
+                           {std::to_string(matches.size())});
 }
 
 void SteamGridDbPickerScreen::setResult(BrowseResult result) {
@@ -176,7 +197,8 @@ void SteamGridDbPickerScreen::setResult(BrowseResult result) {
     else if (!previousMatches.empty())
         m_gameMatches = previousMatches;
     if (m_result.success) {
-        m_message = std::to_string(m_result.candidates.size()) + " choices for " + m_result.gameName;
+        m_message = fillPlaceholders(pickerText("sgdb_picker.choices_for", "{} choices for {}"),
+                                     {std::to_string(m_result.candidates.size()), m_result.gameName});
     } else if (m_result.error.empty()) {
         m_message = nxui::I18n::instance().tr(
             "settings.steamgriddb.search_failed",
@@ -359,8 +381,11 @@ nxui::Rect SteamGridDbPickerScreen::containRect(const nxui::Texture& texture,
 }
 
 std::string SteamGridDbPickerScreen::kindLabel() const {
-    return m_result.kind == SteamGridDbManager::ArtworkKind::Hero ? "Hero"
-         : m_result.kind == SteamGridDbManager::ArtworkKind::Logo ? "Logo" : "Icon";
+    return m_result.kind == SteamGridDbManager::ArtworkKind::Hero
+               ? pickerText("game.steamgriddb.hero", "Hero")
+         : m_result.kind == SteamGridDbManager::ArtworkKind::Logo
+               ? pickerText("game.steamgriddb.logo", "Logo")
+               : pickerText("sgdb_picker.kind_icon", "Icon");
 }
 
 int SteamGridDbPickerScreen::gameListCount() const {
@@ -390,11 +415,11 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
     if (bodyFont) {
         // Keep search controls at near-native small-font size (old 0.72 scale
         // made the query / Change name row almost unreadable on TV).
-        const std::string searchLine = "Search  " + m_result.query;
+        const std::string searchLine = pickerText("sgdb_picker.search", "Search") + "  " + m_result.query;
         renderer.drawText(searchLine, {108.f, 148.f}, bodyFont,
                           m_theme->textPrimary, 1.f);
         const float searchW = bodyFont->measure(searchLine).x;
-        renderer.drawText("X  Change name", {108.f + searchW + 28.f, 148.f}, bodyFont,
+        renderer.drawText(pickerText("sgdb_picker.change_name", "X  Change name"), {108.f + searchW + 28.f, 148.f}, bodyFont,
                           m_theme->cursorNormal, 1.f);
     }
 
@@ -430,7 +455,7 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
         const std::string headline = transport
             ? nxui::I18n::instance().tr("settings.steamgriddb.https_clock_title",
                                         "Couldn't reach SteamGridDB")
-            : "Search failed";
+            : pickerText("sgdb_picker.search_failed_title", "Search failed");
         float textY = status.y + 36.f;
         if (titleFont) {
             renderer.drawText(headline, {status.x + 40.f, textY}, titleFont,
@@ -444,7 +469,7 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
                                   m_theme->textPrimary, 1.05f);
                 textY += 34.f;
             }
-            renderer.drawText("B Back   X Try another search",
+            renderer.drawText(pickerText("sgdb_picker.hint_error", "B Back   X Try another search"),
                               {status.x + 40.f, status.y + status.height - 48.f},
                               bodyFont, m_theme->textSecondary, 0.95f);
         }
@@ -475,7 +500,7 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
             }
         }
         if (bodyFont && count > 0) {
-            renderer.drawText("A Choose game   B Back   X Search",
+            renderer.drawText(pickerText("sgdb_picker.hint_games", "A Choose game   B Back   X Search"),
                               {108.f, 651.f}, bodyFont, m_theme->textSecondary, 0.95f);
         }
         return;
@@ -510,9 +535,10 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
     }
     if (bodyFont && count > 0) {
         const int pages = (count + kPerPage - 1) / kPerPage;
-        const char* backHint = m_gameMatches.empty() ? "B Back" : "B Games";
-        renderer.drawText(std::string("A Apply   ") + backHint + "   X Search   Page "
-                          + std::to_string(page + 1) + "/" + std::to_string(pages),
+        const std::string artHint = m_gameMatches.empty()
+            ? pickerText("sgdb_picker.hint_art_back", "A Apply   B Back   X Search   Page {}/{}")
+            : pickerText("sgdb_picker.hint_art_games", "A Apply   B Games   X Search   Page {}/{}");
+        renderer.drawText(fillPlaceholders(artHint, {std::to_string(page + 1), std::to_string(pages)}),
                           {108.f, 651.f}, bodyFont, m_theme->textSecondary, 0.95f);
     }
 }
@@ -540,14 +566,14 @@ void SteamGridDbPickerScreen::activateSelection() {
         if (m_selected < 0 || m_selected >= count) return;
         const GameMatch match = m_gameMatches[(size_t)m_selected];
         m_loading = true;
-        m_message = "Loading artwork for " + match.name + "...";
+        m_message = fillPlaceholders(pickerText("sgdb_picker.loading_for", "Loading artwork for {}..."), {match.name});
         if (m_pickGameCb) m_pickGameCb(m_result, match);
         return;
     }
     const int count = artworkCount();
     if (m_selected < 0 || m_selected >= count) return;
     m_loading = true;
-    m_message = "Applying selection...";
+    m_message = pickerText("sgdb_picker.applying", "Applying selection...");
     if (m_applyCb) m_applyCb(m_result, m_result.candidates[(size_t)m_selected]);
 }
 

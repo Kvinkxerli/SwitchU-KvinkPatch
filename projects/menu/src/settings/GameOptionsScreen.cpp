@@ -1,4 +1,5 @@
 #include "GameOptionsScreen.hpp"
+#include <nxui/core/Utf8.hpp>
 #include <nxui/core/I18n.hpp>
 #include <nxui/core/Renderer.hpp>
 #include <algorithm>
@@ -9,7 +10,7 @@ std::string ellipsize(nxui::Font* font, std::string text, float maxWidth, float 
     if (!font || font->measure(text).x * scale <= maxWidth)
         return text;
     while (!text.empty()) {
-        text.pop_back();
+        nxui::popUtf8Codepoint(text);
         if (font->measure(text + "...").x * scale <= maxWidth)
             return text + "...";
     }

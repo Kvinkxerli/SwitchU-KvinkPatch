@@ -8,6 +8,7 @@
 #include "widgets/WaraWaraBackground.hpp"
 #include "core/AudioManager.hpp"
 #include "core/AccessibilityManager.hpp"
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -46,7 +47,7 @@ private:
     void buildSteps();
     void loadAnimaleseSfx();
     void buildUi();
-    void playAnimaleseFor(char ch);
+    void playAnimaleseFor(uint32_t codepoint);
     void advanceStep();
     void skipAll();
     void finish();

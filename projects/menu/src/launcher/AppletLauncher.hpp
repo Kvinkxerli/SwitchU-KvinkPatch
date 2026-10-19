@@ -9,9 +9,17 @@ public:
         std::function<void()>     playSfxModalHide;
         std::function<void()>     requestExit;
         std::function<bool()>     beforePowerAction;
+        // Called right before a command that hands the screen to another
+        // process (launch / resume / system applets).
+        std::function<void()>     beforeHandoff;
     };
 
     void init(Callbacks cbs);
+
+private:
+    void beforeHandoff() { if (m_cb.beforeHandoff) m_cb.beforeHandoff(); }
+
+public:
 
     void launchAlbum();
     void launchMiiEditor();

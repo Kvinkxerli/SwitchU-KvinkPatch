@@ -595,15 +595,27 @@ bool WiiUMenuApp::saveLeaveFrame(nxui::Renderer& ren) {
 
     const LeaveFrameSession session = captureLeaveSession();
     m_leaveCaptureFocusTitleId = 0;
-    if (!LeaveFrameCache::save(session, rgba.data(), width, height)) {
-        DebugLog::log("[leave] cache write failed");
-        return false;
-    }
 
-    DebugLog::log("[leave] saved %dx%d page=%d folder=%u focus=%016lX",
-                  width, height, session.page, session.openFolderId,
-                  static_cast<unsigned long>(session.focusTitleId));
+    // Never run two writers on the same file.
+    waitLeaveFrameWrite();
+    m_leaveFrameWriteFuture = std::async(std::launch::async,
+        [session, rgba = std::move(rgba), width, height]() mutable {
+            const bool ok = LeaveFrameCache::save(session, rgba.data(), width, height);
+            if (ok) {
+                DebugLog::log("[leave] saved %dx%d page=%d folder=%u focus=%016lX",
+                              width, height, session.page, session.openFolderId,
+                              static_cast<unsigned long>(session.focusTitleId));
+            } else {
+                DebugLog::log("[leave] cache write failed");
+            }
+            return ok;
+        });
     return true;
+}
+
+void WiiUMenuApp::waitLeaveFrameWrite() {
+    if (m_leaveFrameWriteFuture.valid())
+        m_leaveFrameWriteFuture.wait();
 }
 
 void WiiUMenuApp::onAfterPresent(nxui::Renderer& ren) {
@@ -782,6 +794,7 @@ bool WiiUMenuApp::onCreate() {
         .playSfxModalHide = [this]() { m_audio.playSfx(Sfx::ModalHide); },
         .requestExit = [this]() { app().requestExit(); },
         .beforePowerAction = [this]() { return quiesceWritersForPowerAction(); },
+        .beforeHandoff = [this]() { waitLeaveFrameWrite(); },
     });
 
 
@@ -856,6 +869,7 @@ bool WiiUMenuApp::quiesceWritersForPowerAction() {
         m_themePackageTransferFuture.wait();
     if (m_softwareDeleteFuture.valid())
         m_softwareDeleteFuture.wait();
+    waitLeaveFrameWrite();
     if (m_layoutDirty)
         saveMenuLayout();
 
@@ -869,6 +883,8 @@ void WiiUMenuApp::onDestroy() {
     // All background jobs may reference services or members owned by this
     // activity. Drain them while the entire object graph is still alive, and
     // only then shut down HTTP, Bluetooth, accessibility and audio.
+    // Make sure the last leave frame is fully on the SD card before exiting.
+    waitLeaveFrameWrite();
     m_iconStreamer.cancelPending();
     if (m_recentWidgetAssetDecode)
         m_recentWidgetAssetDecode->cancelled.store(true);
@@ -3509,7 +3525,7 @@ nxui::Rect WiiUMenuApp::folderPanelRect() const {
     // geometry as IconGrid::dynamicIconRect so the plate tracks the row.
     if (m_appLayoutMode == AppLayoutMode::DynamicLine) {
         const nxui::Rect grid = m_grid->rect();
-        const float centerY = grid.y + grid.height * 0.66f;
+        const float centerY = grid.y + grid.height * IconGrid::kLineCenterFraction;
         constexpr float baseCellH = 150.f;
         constexpr float focusScale = 1.36f;
         constexpr float sideLift = 32.f;
@@ -3552,7 +3568,9 @@ void WiiUMenuApp::syncSteamGridDbLogoArea() {
         m_steamGridDbBackdrop->setLogoArea(
             {370.f, top, 540.f, std::max(40.f, bottom - top)});
     } else {
-        m_steamGridDbBackdrop->setLogoArea({370.f, 149.f, 540.f, 150.f});
+        // The single-row carousel is vertically centred (focused tile spans
+        // roughly y 258-462), so the logo band must end above it.
+        m_steamGridDbBackdrop->setLogoArea({370.f, 100.f, 540.f, 146.f});
     }
 }
 
@@ -4505,8 +4523,14 @@ void WiiUMenuApp::buildGrid() {
             }
             m_steamGridDbPicker->showLoading(browse.titleId, browse.title, browse.query,
                                              browse.kind, true);
-            m_steamGridDbPicker->setMessage("Loading artwork for " + match.name + "...",
-                                            true);
+            {
+                std::string loadingText = nxui::I18n::instance().tr(
+                    "sgdb_picker.loading_for", "Loading artwork for {}...");
+                const std::size_t at = loadingText.find("{}");
+                if (at != std::string::npos)
+                    loadingText.replace(at, 2, match.name);
+                m_steamGridDbPicker->setMessage(loadingText, true);
+            }
             focusManager().setFocus(m_steamGridDbPicker.get());
             m_steamGridDbBrowseFuture = std::async(std::launch::async,
                 [apiKey = m_config.steamGridDbApiKey, browse, match]() {

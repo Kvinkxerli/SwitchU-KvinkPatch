@@ -1,4 +1,5 @@
 #include "FolderOptionsScreen.hpp"
+#include <nxui/core/Utf8.hpp>
 #include "widgets/FolderPalette.hpp"
 #include "widgets/FolderStyleDraw.hpp"
 #include "core/FolderStore.hpp"
@@ -12,7 +13,7 @@ std::string ellipsize(nxui::Font* font, std::string text, float maxWidth) {
     if (!font || font->measure(text).x <= maxWidth)
         return text;
     while (!text.empty()) {
-        text.pop_back();
+        nxui::popUtf8Codepoint(text);
         if (font->measure(text + "...").x <= maxWidth)
             return text + "...";
     }

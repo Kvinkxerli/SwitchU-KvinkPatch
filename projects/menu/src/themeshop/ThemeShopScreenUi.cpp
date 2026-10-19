@@ -1,4 +1,5 @@
 #include "ThemeShopScreen.hpp"
+#include <nxui/core/Utf8.hpp>
 
 #include "widgets/ActionButtonStyle.hpp"
 #include "core/DebugLog.hpp"
@@ -190,7 +191,7 @@ std::string ellipsize(nxui::Font* font, const std::string& text, float maxWidth,
 
     std::string out = text;
     while (!out.empty() && measureTextCached(font, out + "...").x * scale > maxWidth)
-        out.pop_back();
+        nxui::popUtf8Codepoint(out);
 
     std::string result = out.empty() ? text : out + "...";
     if (g_ellipsizeCache.size() >= kEllipsizeCacheLimit)

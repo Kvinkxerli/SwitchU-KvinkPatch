@@ -238,7 +238,9 @@
     }
   },
   "userselect": {
-    "title": "Chi sta giocando?"
+    "title": "Chi sta giocando?",
+    "profile_fallback": "Profilo",
+    "accessibility_hints": "Sinistra e destra per cambiare profilo. A per confermare. B per annullare."
   },
   "game": {
     "move": "Sposta",
@@ -460,7 +462,8 @@
     },
     "position": {
       "row": "riga",
-      "column": "colonna"
+      "column": "colonna",
+      "of": "di"
     },
     "move_mode": {
       "enter": "Spostamento gioco: ",
@@ -470,7 +473,8 @@
     "grid": {
       "empty_slot": "Casella vuota"
     },
-    "user_profile": "Profilo utente"
+    "user_profile": "Profilo utente",
+    "dialog_hints": "Sinistra e destra per cambiare. A per confermare. B per annullare."
   },
   "tutorial": {
     "accessibility": {

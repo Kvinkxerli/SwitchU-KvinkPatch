@@ -1,4 +1,5 @@
 #include "QuickSettingsOverlay.hpp"
+#include <nxui/core/Utf8.hpp>
 #include "core/DebugLog.hpp"
 
 #include <nxui/core/Renderer.hpp>
@@ -233,7 +234,7 @@ static std::string ellipsize(nxui::Font* font, const std::string& text, float ma
     const std::string ellipsis = "...";
     std::string out = text;
     while (!out.empty() && font->measure(out + ellipsis).x * scale > maxWidth)
-        out.pop_back();
+        nxui::popUtf8Codepoint(out);
     return out + ellipsis;
 }
 
@@ -3156,8 +3157,29 @@ void QuickSettingsOverlay::render(nxui::Renderer& ren) {
                          primaryText, 0.82f);
         }
 
+        // The ON/OFF label lives in the free half of the pill, opposite the knob.
+        // Localized labels (e.g. "ВЫКЛ") are wider than "OFF", so size the pill
+        // from the widest label and shrink the text if it still does not fit.
+        const std::string onStr = i18n.tr("quicksettings.on", "ON");
+        const std::string offStr = i18n.tr("quicksettings.off", "OFF");
+        const std::string stateStr = enabled ? onStr : offStr;
+        float stateScale = 0.65f;
+        const float pillH = 28.f;
+        const float labelPad = 8.f;
         float pillW = 56.f;
-        float pillH = 28.f;
+        if (m_smallFont) {
+            const float widest = std::max(m_smallFont->measure(onStr).x,
+                                          m_smallFont->measure(offStr).x);
+            pillW = std::max(pillW, pillH + widest * stateScale + labelPad * 2.f);
+            // Keep the pill from swallowing the row label.
+            const float maxPillW = std::max(56.f, card.width * 0.42f);
+            if (pillW > maxPillW) {
+                pillW = maxPillW;
+                const float room = pillW - pillH - labelPad * 2.f;
+                if (widest > 0.f)
+                    stateScale = std::min(stateScale, std::max(0.40f, room / widest));
+            }
+        }
         nxui::Rect pill = {card.x + card.width - pillW - 12.f, card.y + (card.height - pillH) * 0.5f, pillW, pillH};
         nxui::Color pillBg = enabled
             ? nxui::Color(0.20f, 0.82f, 0.45f, 0.90f * alpha)
@@ -3170,16 +3192,16 @@ void QuickSettingsOverlay::render(nxui::Renderer& ren) {
                        nxui::Color(1.f, 1.f, 1.f, alpha));
 
         if (m_smallFont) {
-            std::string stateStr = enabled
-                ? i18n.tr("quicksettings.on", "ON")
-                : i18n.tr("quicksettings.off", "OFF");
             nxui::Vec2 ssz = m_smallFont->measure(stateStr);
-            float stx = enabled ? (pill.x + 8.f) : (pill.x + pill.width - ssz.x * 0.65f - 8.f);
-            ren.drawText(stateStr, {stx, pill.y + (pillH - ssz.y * 0.65f) * 0.5f}, m_smallFont,
+            // Free area = pill minus the knob's slot, centered text inside it.
+            const float freeX = enabled ? pill.x : pill.x + pillH;
+            const float freeW = pill.width - pillH;
+            float stx = freeX + (freeW - ssz.x * stateScale) * 0.5f;
+            ren.drawText(stateStr, {stx, pill.y + (pillH - ssz.y * stateScale) * 0.5f}, m_smallFont,
                          lightMode
                             ? nxui::Color(0.04f, 0.05f, 0.07f, 0.95f * alpha)
                             : nxui::Color(1.f, 1.f, 1.f, 0.95f * alpha),
-                         0.65f);
+                         stateScale);
         }
     };
 
@@ -3214,8 +3236,15 @@ void QuickSettingsOverlay::render(nxui::Renderer& ren) {
             nxui::Vec2 lsz = m_smallFont->measure(label);
             nxui::Color textColor = focused ? primaryText : secondaryText;
             // Shared metrics so Sleep / Reboot / Power Off read as one family.
-            const float textScale = kPowerTextScale;
             const float iconGap = kPowerIconGap;
+            // Longer localized labels (e.g. "Перезагрузить") must stay inside
+            // the button: shrink the text just enough to fit.
+            const float padX = 10.f;
+            const float iconReserve = (pa == PowerAction::Sleep) ? 18.f : 22.f;
+            float textScale = kPowerTextScale;
+            const float availW = btn.width - padX * 2.f - iconReserve - iconGap;
+            if (lsz.x * textScale > availW && lsz.x > 0.f)
+                textScale = std::max(0.45f, availW / lsz.x);
 
             if (pa == PowerAction::Sleep) {
                 const float iconSlot = 18.f;

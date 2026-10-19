@@ -20,8 +20,63 @@ static constexpr const char* TUTORIAL_ASSETS = "sdmc:/switch/SwitchU";
 
 namespace {
 
-bool isTextChar(char ch) {
-    return std::isalnum(static_cast<unsigned char>(ch)) != 0;
+// Length in bytes of the UTF-8 sequence starting at text[pos]. Falls back to 1
+// for stray/invalid bytes and clamps to the end of the string, so the typewriter
+// can never stop in the middle of a multi-byte character (Cyrillic is 2 bytes).
+size_t utf8SequenceLength(const std::string& text, size_t pos) {
+    const unsigned char lead = static_cast<unsigned char>(text[pos]);
+    size_t len = 1;
+    if (lead >= 0xF0)      len = 4;
+    else if (lead >= 0xE0) len = 3;
+    else if (lead >= 0xC0) len = 2;
+    if (pos + len > text.size())
+        return text.size() - pos;
+    for (size_t i = 1; i < len; ++i) {
+        if ((static_cast<unsigned char>(text[pos + i]) & 0xC0) != 0x80)
+            return 1;
+    }
+    return len;
+}
+
+uint32_t utf8Decode(const std::string& text, size_t pos, size_t len) {
+    const unsigned char lead = static_cast<unsigned char>(text[pos]);
+    if (len == 1)
+        return lead;
+    uint32_t cp = lead & (len == 2 ? 0x1F : len == 3 ? 0x0F : 0x07);
+    for (size_t i = 1; i < len; ++i)
+        cp = (cp << 6) | (static_cast<unsigned char>(text[pos + i]) & 0x3F);
+    return cp;
+}
+
+// Animalese samples only exist for a-z and 0-9. Map every spoken character to
+// one of those so non-Latin text (Russian, accented letters...) is voiced too.
+// Returns 0 when the character should stay silent.
+char animaleseLetterFor(uint32_t cp) {
+    if (cp < 0x80) {
+        const unsigned char c = static_cast<unsigned char>(cp);
+        return std::isalnum(c) ? static_cast<char>(std::tolower(c)) : 0;
+    }
+
+    // Cyrillic: rough phonetic mapping (upper case folds onto lower case).
+    static constexpr char kCyrillic[32] = {
+        'a', 'b', 'v', 'g', 'd', 'e', 'j', 'z',  // а б в г д е ж з
+        'i', 'y', 'k', 'l', 'm', 'n', 'o', 'p',  // и й к л м н о п
+        'r', 's', 't', 'u', 'f', 'h', 'c', 'c',  // р с т у ф х ц ч
+        's', 's', 0,   'y', 0,   'e', 'u', 'a',  // ш щ ъ ы ь э ю я
+    };
+    if (cp >= 0x0410 && cp <= 0x042F)
+        return kCyrillic[cp - 0x0410];
+    if (cp >= 0x0430 && cp <= 0x044F)
+        return kCyrillic[cp - 0x0430];
+    if (cp == 0x0401 || cp == 0x0451) // Ё ё
+        return 'o';
+
+    // Other scripts and accented letters: stable pseudo-letter per character.
+    // Punctuation/symbols/emoji ranges stay silent.
+    if ((cp >= 0x00C0 && cp <= 0x024F) || (cp >= 0x0370 && cp <= 0x03FF)
+        || (cp >= 0x3040 && cp <= 0x9FFF) || (cp >= 0xAC00 && cp <= 0xD7AF))
+        return static_cast<char>('a' + (cp % 26));
+    return 0;
 }
 
 std::string utf8Codepoint(uint32_t cp) {
@@ -271,14 +326,15 @@ void TutorialActivity::buildUi() {
     m_navCursor->moveTo({928.f, 352.f, 107.f, 41.f}, 16.f, 0.01f);
 }
 
-void TutorialActivity::playAnimaleseFor(char ch) {
+void TutorialActivity::playAnimaleseFor(uint32_t codepoint) {
     if (m_accessibilityEnabled)
         return;
-    if (!isTextChar(ch))
+    const char letter = animaleseLetterFor(codepoint);
+    if (letter == 0)
         return;
 
     std::string id = "animalese_";
-    id.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    id.push_back(letter);
     m_audio.playNamedSfx(id);
 }
 
@@ -292,8 +348,13 @@ void TutorialActivity::updateTyping(float dt) {
 
     m_charTimer -= dt;
     while (m_charTimer <= 0.f && m_visibleChars < step.body.size()) {
-        const char ch = step.body[m_visibleChars++];
-        playAnimaleseFor(ch);
+        // m_visibleChars is a byte offset that always sits on a character
+        // boundary: reveal one whole UTF-8 character at a time.
+        const size_t len = utf8SequenceLength(step.body, m_visibleChars);
+        const uint32_t cp = utf8Decode(step.body, m_visibleChars, len);
+        m_visibleChars += len;
+        playAnimaleseFor(cp);
+        const char ch = cp < 0x80 ? static_cast<char>(cp) : '\0';
         if (ch == '.' || ch == ':' || ch == ';')
             m_charTimer += 0.15f;
         else if (ch == ',' || ch == '!')

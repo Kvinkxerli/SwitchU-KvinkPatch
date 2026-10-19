@@ -3,7 +3,9 @@
     "auto": "Auto",
     "na": "N/A",
     "active": "Active",
-    "disabled": "Disabled"
+    "disabled": "Disabled",
+    "loading": "Loading",
+    "none": "None"
   },
   "accessibility": {
     "speech": {
@@ -40,7 +42,8 @@
       "progress": "progress",
       "info": "information",
       "section": "section",
-      "widget": "widget"
+      "widget": "widget",
+      "folder": "folder"
     },
     "hints": {
       "open": "A to open.",
@@ -81,7 +84,8 @@
     "position": {
       "row": "row",
       "column": "column",
-      "item": "item"
+      "item": "item",
+      "of": "of"
     },
     "move_mode": {
       "enter": "Moving game: ",
@@ -91,7 +95,8 @@
     "grid": {
       "empty_slot": "Empty slot"
     },
-    "user_profile": "User profile"
+    "user_profile": "User profile",
+    "dialog_hints": "Left and right to change. A to confirm. B to cancel."
   },
   "tutorial": {
     "header": "SwitchU tutorial",
@@ -173,7 +178,16 @@
     "artwork": "Art",
     "place": "Place",
     "modes": "Modes",
-    "skip": "Skip"
+    "skip": "Skip",
+    "back": "Back",
+    "close": "Close",
+    "confirm": "Confirm",
+    "launch": "Launch",
+    "move": "Move",
+    "navigate": "Navigate",
+    "open": "Open",
+    "resume": "Resume",
+    "select": "Select"
   },
   "settings": {
     "tabs": {
@@ -309,7 +323,9 @@
       "page_translate": "Translate",
       "page_teleport": "Teleport",
       "ui_wireframe": "UI Wireframe",
-      "ui_wireframe_desc": "Show outlines of all Box widgets for layout debugging."
+      "ui_wireframe_desc": "Show outlines of all Box widgets for layout debugging.",
+      "grid_columns": "Home Grid Columns",
+      "grid_rows": "Home Grid Rows"
     },
     "internet": {
       "wifi_ssid": "WiFi Network",
@@ -355,7 +371,8 @@
       "scan_cancelled": "Artwork scan cancelled.",
       "https_clock_hint": "HTTPS failed. If the console clock is wrong, fix it in Settings > System - try Synchronize Clock via Public Servers.",
       "search_failed": "Search failed. If HTTPS keeps failing, check the console clock in Settings > System.",
-      "https_clock_title": "Couldn't reach SteamGridDB"
+      "https_clock_title": "Couldn't reach SteamGridDB",
+      "api_key_guide": "Enter your API key"
     },
     "controllers": {
       "test": "Test Input Devices",
@@ -412,7 +429,18 @@
       "media_sleep": "Sleep While Playing Media",
       "media_sleep_desc": "Allow the console to auto-sleep even during media playback.",
       "wake_power": "Wake at Power State Change",
-      "wake_power_desc": "Wake the console when the AC adapter is connected or disconnected."
+      "wake_power_desc": "Wake the console when the AC adapter is connected or disconnected.",
+      "auto_sleep": "Auto-Sleep",
+      "power_actions": "Power",
+      "reboot": "Reboot",
+      "reboot_confirm": "Restart the console?",
+      "reboot_desc": "Restart the console.",
+      "shutdown": "Shutdown",
+      "shutdown_confirm": "Power off the console?",
+      "shutdown_desc": "Completely power off the console.",
+      "sleep_confirm": "Put the console into sleep mode?",
+      "sleep_now": "Sleep",
+      "sleep_now_desc": "Put the console into sleep mode."
     },
     "theme": {
       "preset": "Preset",
@@ -467,7 +495,10 @@
       "used": "Used",
       "summary": "Summary",
       "details": "Details",
-      "delete": "Delete"
+      "delete": "Delete",
+      "homebrew_library_unavailable": "Installed software management is unavailable in homebrew mode.",
+      "manage_title": "Manage Software",
+      "title_id": "Title ID"
     },
     "about": {
       "version": "Version",
@@ -478,12 +509,15 @@
       "acknowledgements_desc": "Thanks to xortroll for your help with your project uLaunch and for your support and advice during development.",
       "source_code": "Source Code",
       "source_code_value": "github.com/PoloNX/SwitchU"
-    }
+    },
+    "loading_tab": "Loading this section in the background."
   },
   "userselect": {
     "add_user": "Add user",
     "add_user_hint": "A to create a new user.",
-    "title": "Who's playing?"
+    "title": "Who's playing?",
+    "profile_fallback": "Profile",
+    "accessibility_hints": "Left and right to change profile. A to confirm. B to cancel."
   },
   "profilelock": {
     "title": "Default profile",
@@ -599,7 +633,9 @@
     "custom_icon_desc": "Search SteamGridDB and use an icon.",
     "custom_icon_set_desc": "SteamGridDB icon is active for this folder. Requires Show cover.",
     "custom_icon_clear_desc": "Remove the custom SteamGridDB cover and use the first game again.",
-    "items": "items"
+    "items": "items",
+    "move": "Move",
+    "page_added": "Page added"
   },
   "add": {
     "title": "Add"
@@ -681,7 +717,8 @@
     "needs_verify": "Game data needs verification.",
     "needs_update": "A required update is available.",
     "no_contents": "Game data is missing.",
-    "cannot_launch": "This game cannot be launched."
+    "cannot_launch": "This game cannot be launched.",
+    "operation_failed": "Operation failed"
   },
   "button": {
     "ok": "OK",
@@ -723,7 +760,9 @@
       "sort_large_tiles": "Sort Large Tiles Too",
       "sort_large_tiles_desc": "A-Z and Recent also move applications that use a larger tile size.",
       "hint_panel": "Panel",
-      "hint_capsules": "Capsules"
+      "hint_capsules": "Capsules",
+      "auto_theme": "Automatic Theme",
+      "auto_theme_desc": "Switch between a day theme and a night theme automatically."
     },
     "accessibility": {
       "fullscreen_preview": "Fullscreen preview",
@@ -814,10 +853,21 @@
       "missing": "No screenshot",
       "prev": "Prev",
       "next": "Next"
+    },
+    "page": {
+      "next": "Next",
+      "prev": "Previous"
     }
   },
   "page": {
-    "minus_hint": "View · hold delete"
+    "minus_hint": "View · hold delete",
+    "delete": "Delete page",
+    "delete_message": "This page is empty. What would you like to remove?",
+    "delete_this": "Delete this page",
+    "delete_title": "Delete page",
+    "delete_unused": "Delete all unused pages",
+    "deleted": "Page deleted",
+    "unused_deleted": "Unused pages deleted"
   },
   "text_entry": {
     "backspace": "←",
@@ -870,6 +920,119 @@
     "play_pause": "Play/Pause",
     "repeat": "Repeat",
     "shuffle": "Shuffle",
-    "playlist": "Playlist"
+    "playlist": "Playlist",
+    "playlist_empty": "No tracks"
+  },
+  "autotheme": {
+    "day_starts": "Day Starts At",
+    "day_theme": "Day Theme",
+    "day_theme_desc": "Applied during the day.",
+    "geo_locating": "Locating via internet...",
+    "geo_location": "Location",
+    "geo_midnight_sun": "Midnight sun",
+    "geo_polar_night": "Polar night",
+    "geo_sunrise": "Sunrise",
+    "geo_sunset": "Sunset",
+    "header": "Automatic Theme",
+    "header_mode": "Mode: ",
+    "mode": "Switching",
+    "mode_desc": "Off keeps your chosen theme. Manual uses fixed hours. Geolocation uses your approximate location (needs internet).",
+    "mode_geo": "Geolocation (IP)",
+    "mode_manual": "Manual hours",
+    "mode_off": "Off",
+    "night_starts": "Night Starts At",
+    "night_theme": "Night Theme",
+    "night_theme_desc": "Applied during the night.",
+    "section": {
+      "geo": "Geolocation",
+      "mode": "Mode",
+      "schedule": "Schedule",
+      "themes": "Themes"
+    },
+    "summary": {
+      "geo": "Geolocation (IP)",
+      "manual": "Manual hours",
+      "off": "Off"
+    },
+    "title": "Auto Theme"
+  },
+  "manager": {
+    "applying": "Applying the change safely...",
+    "cancel": "Cancel",
+    "check_updates": "Check for updates",
+    "confirm_disable_title": "Disable SwitchU?",
+    "confirm_enable_title": "Enable SwitchU?",
+    "confirm_toggle_message": "The change will take effect after a restart.",
+    "conflict": "Both enabled and disabled override files exist. Resolve the installation manually.",
+    "disable": "Disable SwitchU",
+    "disabled_detail": "The original Nintendo HOME menu is configured for this boot.",
+    "do_not_close": "Do not close the application.",
+    "enable": "Enable SwitchU",
+    "enabled_detail": "The SwitchU HOME menu is configured for this boot.",
+    "error_commit": "The SD card could not be synchronized. The change was rolled back.",
+    "error_invalid": "The installation state changed. No action was taken.",
+    "error_payload": "The SwitchU menu payload is incomplete. Activation was cancelled.",
+    "error_reboot": "The console could not be restarted. The configuration change is still saved.",
+    "error_rename": "The Atmosphere override could not be renamed.",
+    "error_rollback": "Rollback failed. Check the SwitchU override files before restarting.",
+    "error_title": "Operation failed",
+    "error_unknown": "An unexpected error occurred.",
+    "error_verify": "The change could not be verified and was rolled back.",
+    "help": "D-pad / stick: navigate  •  A: confirm  •  B: quit",
+    "help_restart": "A: confirm  •  B: later",
+    "later": "Later",
+    "missing": "SwitchU's Atmosphere override was not found on the SD card.",
+    "next_boot_disabled": "SwitchU will be disabled after the next restart.",
+    "next_boot_enabled": "SwitchU will be enabled after the next restart.",
+    "no_change": "No unrelated data was modified.",
+    "ok": "OK",
+    "operation_blocked": "Operation blocked for safety",
+    "reboot": "Restart",
+    "reboot_confirm_message": "Close any other software and save your work before restarting.",
+    "reboot_confirm_title": "Restart the console?",
+    "reboot_now": "Restart now",
+    "restart_required": "Restart required",
+    "status_disabled": "SwitchU disabled",
+    "status_enabled": "SwitchU enabled",
+    "status_unknown": "SwitchU state unavailable",
+    "subtitle": "Manage the HOME menu used on the next boot.",
+    "title": "SwitchU Manager",
+    "up_to_date": "Up to date",
+    "update_available": "A new SwitchU version is available: ",
+    "update_check_failed": "Update check failed. You can retry.",
+    "update_checking": "Checking the latest GitHub release...",
+    "update_checking_button": "Checking for updates...",
+    "update_confirm_message": "Download and install SwitchU ",
+    "update_confirm_suffix": " from GitHub? Your configuration and themes will be preserved.",
+    "update_confirm_title": "Install SwitchU update?",
+    "update_download": "Download",
+    "update_error_title": "Update failed",
+    "update_install": "Install update",
+    "update_installation": "Installation",
+    "update_installing": "Downloading and installing the SwitchU update...",
+    "update_preparing": "Preparing update...",
+    "update_progress_title": "Installing SwitchU update",
+    "update_retry": "Retry update check",
+    "update_stage_downloading": "Downloading update...",
+    "update_stage_extracting": "Preparing installation...",
+    "update_stage_installing": "Installing files...",
+    "update_stage_verifying": "Verifying download...",
+    "update_to": "Update to ",
+    "updating": "Updating..."
+  },
+  "sgdb_picker": {
+    "no_games": "No games found",
+    "games_pick": "{} games — pick one",
+    "choices_for": "{} choices for {}",
+    "kind_icon": "Icon",
+    "search": "Search",
+    "change_name": "X  Change name",
+    "search_failed_title": "Search failed",
+    "hint_error": "B Back   X Try another search",
+    "hint_games": "A Choose game   B Back   X Search",
+    "hint_art_back": "A Apply   B Back   X Search   Page {}/{}",
+    "hint_art_games": "A Apply   B Games   X Search   Page {}/{}",
+    "loading_for": "Loading artwork for {}...",
+    "applying": "Applying selection..."
   }
 }

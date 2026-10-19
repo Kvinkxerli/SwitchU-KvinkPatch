@@ -1,4 +1,5 @@
 #include "TabbedOverlayScreen.hpp"
+#include <nxui/core/Utf8.hpp>
 #include "SettingItemWidgets.hpp"
 #include "core/DebugLog.hpp"
 #include <nxui/core/I18n.hpp>
@@ -824,7 +825,7 @@ void TabbedOverlayScreen::drawDropdown(nxui::Renderer& ren, const nxui::Rect& pa
             if (tsz.x > maxWidth) {
                 std::string ellipsis = "...";
                 while (!displayText.empty()) {
-                    displayText.pop_back();
+                    nxui::popUtf8Codepoint(displayText);
                     tsz = m_smallFont->measure(displayText + ellipsis);
                     if (tsz.x <= maxWidth || displayText.empty())
                         break;
@@ -862,7 +863,7 @@ void TabbedOverlayScreen::drawTrackChangedToast(nxui::Renderer& ren, const nxui:
     nxui::Vec2 tsz = m_smallFont->measure(displayText);
     if (tsz.x * 0.78f > maxTextWidth) {
         while (!displayText.empty() && m_smallFont->measure(displayText + "...").x * 0.78f > maxTextWidth)
-            displayText.pop_back();
+            nxui::popUtf8Codepoint(displayText);
         displayText += "...";
         tsz = m_smallFont->measure(displayText);
     }

@@ -71,7 +71,8 @@
       "slider_actions": "Gauche ou droite pour ajuster. B pour revenir aux onglets.",
       "selector_actions": "A ou droite pour ouvrir la liste. B pour revenir aux onglets.",
       "action_actions": "A pour lancer l'action. B pour revenir aux onglets.",
-      "companion_actions": "A pour activer. Droite pour la liste. B pour fermer."
+      "companion_actions": "A pour activer. Droite pour la liste. B pour fermer.",
+      "action_secondary_actions": "Gauche et droite pour choisir Sélectionner ou Effacer. A pour activer. B pour revenir aux onglets."
     },
     "value": {
       "label": "Valeur",
@@ -80,7 +81,8 @@
     "position": {
       "row": "ligne",
       "column": "colonne",
-      "item": "élément"
+      "item": "élément",
+      "of": "sur"
     },
     "move_mode": {
       "enter": "Déplacement du jeu: ",
@@ -90,7 +92,8 @@
     "grid": {
       "empty_slot": "Emplacement vide"
     },
-    "user_profile": "Profil utilisateur"
+    "user_profile": "Profil utilisateur",
+    "dialog_hints": "Gauche et droite pour changer. A pour valider. B pour annuler."
   },
   "tutorial": {
     "header": "Tutoriel SwitchU",
@@ -167,7 +170,12 @@
     "sort_alpha": "A-Z",
     "sort_recent": "Récents",
     "modes": "Modes",
-    "skip": "Passer"
+    "skip": "Passer",
+    "cancel_b": "B Annuler",
+    "cancel": "Annuler",
+    "fullscreen": "Plein écran",
+    "artwork": "Visuel",
+    "place": "Placer"
   },
   "settings": {
     "tabs": {
@@ -341,7 +349,15 @@
       "download_start": "Recherche sur SteamGridDB...",
       "https_clock_hint": "Echec HTTPS. Si l'horloge de la console est incorrecte, corrigez-la dans Parametres > Systeme - essayez Synchroniser l'horloge via des serveurs publics.",
       "search_failed": "Echec de la recherche. Si HTTPS echoue encore, verifiez l'horloge dans Parametres > Systeme.",
-      "https_clock_title": "Impossible d'atteindre SteamGridDB"
+      "https_clock_title": "Impossible d'atteindre SteamGridDB",
+      "show_grid": "Afficher dans le menu en grille",
+      "show_grid_desc": "Image de fond derrière la grille HOME standard.",
+      "show_line": "Afficher dans le menu sur une ligne",
+      "show_line_desc": "Image de fond et logo derrière le carrousel sur une ligne.",
+      "show_folders": "Afficher dans les dossiers",
+      "show_folders_desc": "Visuels lors de la navigation dans un dossier ouvert.",
+      "cancelling": "Annulation...",
+      "scan_cancelled": "Recherche de visuels annulée."
     },
     "controllers": {
       "test": "Tester les périphériques",
@@ -469,7 +485,9 @@
   "userselect": {
     "add_user": "Ajouter un utilisateur",
     "add_user_hint": "A pour créer un nouvel utilisateur.",
-    "title": "Qui joue ?"
+    "title": "Qui joue ?",
+    "profile_fallback": "Profil",
+    "accessibility_hints": "Gauche et droite pour changer de profil. A pour valider. B pour annuler."
   },
   "profilelock": {
     "title": "Profil par défaut",
@@ -519,7 +537,10 @@
       "logo": "Logo",
       "logo_desc": "Ouvre la galerie des logos pour choisir l'image à utiliser.",
       "icon": "Icône de remplacement",
-      "icon_desc": "Ouvre la galerie des icônes pour remplacer celle du jeu."
+      "icon_desc": "Ouvre la galerie des icônes pour remplacer celle du jeu.",
+      "clear_desc": "Supprime la personnalisation SteamGridDB et rétablit celle par défaut.",
+      "cleared": "Visuel SteamGridDB supprimé.",
+      "nothing_to_clear": "Aucun visuel SteamGridDB à supprimer."
     }
   },
   "folder": {
@@ -567,7 +588,22 @@
     "size_small": "Petit",
     "size_medium": "Moyen",
     "size_large": "Grand",
-    "items": "éléments"
+    "items": "éléments",
+    "style": "Style des dossiers",
+    "style_desc": "Change l'apparence (de tous les dossiers)",
+    "style_classic": "Classique",
+    "style_simple": "Simple",
+    "style_minimal": "Minimal",
+    "style_tab": "Onglet",
+    "style_ring": "Anneau",
+    "style_manila": "Manille",
+    "style_label": "Étiquette",
+    "show_cover": "Afficher la couverture",
+    "show_cover_desc": "Affiche l'icône de la première application sur les dossiers.",
+    "custom_icon": "Icône de couverture personnalisée",
+    "custom_icon_desc": "Cherche sur SteamGridDB et utilise une icône.",
+    "custom_icon_set_desc": "Une icône SteamGridDB est active pour ce dossier. Nécessite « Afficher la couverture ».",
+    "custom_icon_clear_desc": "Supprime la couverture SteamGridDB personnalisée et réutilise le premier jeu."
   },
   "add": {
     "title": "Ajouter"
@@ -668,7 +704,9 @@
     "search": "Rechercher",
     "manage": "Gérer",
     "stop": "Arrêter",
-    "pair": "Associer"
+    "pair": "Associer",
+    "none": "Aucun",
+    "clear_x": "×"
   },
   "themeshop": {
     "source": {
@@ -803,7 +841,9 @@
     "space": "Espace",
     "style_flat": "Clavier plat",
     "style_glass": "Clavier verre",
-    "symbols": "?12#"
+    "symbols": "?12#",
+    "backspace": "←",
+    "caps": "MAJ"
   },
   "quicksettings": {
     "title": "Paramètres rapides",
@@ -827,6 +867,13 @@
     "power_off": "Éteindre",
     "hint_adjust": "Ajuster",
     "hint_shortcut": "Paramètres rapides",
-    "music_idle": "Aucune lecture"
+    "music_idle": "Aucune lecture",
+    "music_empty": "Aucune musique chargée",
+    "prev": "Préc.",
+    "next": "Suiv.",
+    "play_pause": "Lecture/Pause",
+    "repeat": "Répéter",
+    "shuffle": "Aléatoire",
+    "playlist": "Playlist"
   }
 }

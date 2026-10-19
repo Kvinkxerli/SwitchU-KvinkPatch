@@ -40,6 +40,7 @@ bool AppletLauncher::preparePowerAction() {
 }
 
 void AppletLauncher::launchAlbum() {
+    beforeHandoff();
     DebugLog::log("[launcher] requesting Album launch via daemon");
     Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchAlbum);
     DebugLog::log("[launcher] Album rc=0x%X", rc);
@@ -50,6 +51,7 @@ void AppletLauncher::launchAlbum() {
 }
 
 void AppletLauncher::launchMiiEditor() {
+    beforeHandoff();
     DebugLog::log("[launcher] requesting Mii Editor launch via daemon");
     Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchMiiEditor);
     DebugLog::log("[launcher] Mii Editor rc=0x%X", rc);
@@ -60,6 +62,7 @@ void AppletLauncher::launchMiiEditor() {
 }
 
 void AppletLauncher::launchControllerPairing() {
+    beforeHandoff();
     DebugLog::log("[launcher] requesting Controller pairing via daemon");
     Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchControllers);
     DebugLog::log("[launcher] Controller pairing rc=0x%X", rc);
@@ -70,6 +73,7 @@ void AppletLauncher::launchControllerPairing() {
 }
 
 void AppletLauncher::launchControllerRemapping() {
+    beforeHandoff();
     DebugLog::log("[launcher] requesting controller remapping via daemon");
     Result rc = switchu::menu::smi_cmd::sendSimple(
         switchu::smi::SystemMessage::LaunchControllerRemapping);
@@ -81,6 +85,7 @@ void AppletLauncher::launchControllerRemapping() {
 }
 
 void AppletLauncher::launchNetConnect() {
+    beforeHandoff();
     DebugLog::log("[launcher] requesting NetConnect launch via daemon");
     Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchNetConnect);
     DebugLog::log("[launcher] NetConnect rc=0x%X", rc);
@@ -91,6 +96,7 @@ void AppletLauncher::launchNetConnect() {
 }
 
 void AppletLauncher::launchUserPage(AccountUid uid) {
+    beforeHandoff();
     DebugLog::log("[launcher] requesting User Page launch via daemon");
     Result rc = switchu::menu::smi_cmd::launchUserPage(uid);
     DebugLog::log("[launcher] User Page rc=0x%X", rc);
@@ -101,6 +107,7 @@ void AppletLauncher::launchUserPage(AccountUid uid) {
 }
 
 void AppletLauncher::launchUserCreator() {
+    beforeHandoff();
     DebugLog::log("[launcher] requesting system user creator via daemon");
     Result rc = switchu::menu::smi_cmd::sendSimple(
         switchu::smi::SystemMessage::LaunchUserCreator);
@@ -130,6 +137,7 @@ void AppletLauncher::reboot() {
 }
 
 void AppletLauncher::launchApplication(uint64_t titleId, AccountUid uid) {
+    beforeHandoff();
     DebugLog::log("[launcher] tid=%016lX", titleId);
     Result rc = switchu::menu::smi_cmd::launchApplication(titleId, uid);
     if (R_FAILED(rc)) {
@@ -145,11 +153,17 @@ void AppletLauncher::resumeApplication() {
         DebugLog::log("[launcher] no app suspended!");
         return;
     }
-    switchu::FileLog::logCommit("[launcher] resume: sending command");
+    // The leave frame must be on the SD card before the menu goes away, but
+    // nothing else needs a synchronous SD commit here: plain log lines keep
+    // the resume hand-off fast.
+    beforeHandoff();
+    switchu::FileLog::log("[launcher] resume: sending command");
     const Result rc = switchu::menu::smi_cmd::resumeApplication();
-    switchu::FileLog::logCommit("[launcher] resume: command returned 0x%X", rc);
+    if (R_FAILED(rc))
+        switchu::FileLog::logCommit("[launcher] resume: command FAIL 0x%X", rc);
+    else
+        switchu::FileLog::log("[launcher] resume: command returned 0x%X", rc);
     if (m_cb.requestExit) m_cb.requestExit();
-    switchu::FileLog::logCommit("[launcher] resume: exit requested");
 }
 
 void AppletLauncher::terminateApplication() {

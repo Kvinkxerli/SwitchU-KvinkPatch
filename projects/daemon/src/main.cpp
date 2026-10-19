@@ -1416,7 +1416,7 @@ static void handleMenuCommand() {
             recordOperationResult(requestId, msg, result,
                                   daemon::app::suspendedTitleId());
         }
-        switchu::FileLog::logCommit("[smi] queued resume (actions=%zu)", g_actionQueue.size());
+        switchu::FileLog::log("[smi] queued resume (actions=%zu)", g_actionQueue.size());
         break;
 
     case smi::SystemMessage::TerminateApplication:
@@ -1605,9 +1605,14 @@ static bool handleAction(daemon::SystemAction& action) {
         }
 
         case daemon::SystemActionType::ResumeApplication: {
-            switchu::FileLog::logCommit("[action] resume: calling app::resume()");
+            // Plain log lines: a synchronous SD commit here delayed the game
+            // coming back to the foreground. Failures are still committed.
+            switchu::FileLog::log("[action] resume: calling app::resume()");
             Result rc = daemon::app::resume();
-            switchu::FileLog::logCommit("[action] resume: app::resume() -> 0x%X", rc);
+            if (R_FAILED(rc))
+                switchu::FileLog::logCommit("[action] resume: app::resume() -> 0x%X", rc);
+            else
+                switchu::FileLog::log("[action] resume: app::resume() -> 0x%X", rc);
             recordOperationResult(action.requestId, smi::SystemMessage::ResumeApplication,
                                   rc, daemon::app::suspendedTitleId());
             if (R_FAILED(rc)) {

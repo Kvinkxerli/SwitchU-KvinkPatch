@@ -333,16 +333,19 @@ void OverlayDialog::currentAccessibilityParts(std::string& context,
         context += (context.empty() ? "" : ". ") + m_message;
 
     if (m_mode == DialogMode::UserSelect) {
+        auto& i18n = nxui::I18n::instance();
         std::string name;
         if (m_selected >= 0 && m_selected < (int)m_users.size())
             name = m_users[(size_t)m_selected].nickname;
         if (name.empty())
-            name = "Profil " + std::to_string(m_selected + 1);
+            name = i18n.tr("userselect.profile_fallback", "Profile") + " " + std::to_string(m_selected + 1);
         summary = name;
         if (m_accessibilitySpeakPosition && !m_users.empty())
-            position = std::to_string(m_selected + 1) + " sur " + std::to_string((int)m_users.size());
+            position = std::to_string(m_selected + 1) + " " + i18n.tr("accessibility.position.of", "of")
+                     + " " + std::to_string((int)m_users.size());
         if (m_accessibilitySpeakHints)
-            summary += ". Gauche et droite pour changer de profil. A pour valider. B pour annuler.";
+            summary += ". " + i18n.tr("userselect.accessibility_hints",
+                "Left and right to change profile. A to confirm. B to cancel.");
         return;
     }
 
@@ -400,10 +403,13 @@ void OverlayDialog::currentAccessibilityParts(std::string& context,
     if (!choice.empty())
         summary = choice;
     if (m_accessibilitySpeakPosition && !m_buttons.empty())
-        position = std::to_string(m_selected + 1) + " sur " + std::to_string((int)m_buttons.size());
+        position = std::to_string(m_selected + 1) + " "
+                 + nxui::I18n::instance().tr("accessibility.position.of", "of")
+                 + " " + std::to_string((int)m_buttons.size());
     if (m_accessibilitySpeakHints) {
         if (!summary.empty()) summary += ". ";
-        summary += "Gauche et droite pour changer. A pour valider. B pour annuler.";
+        summary += nxui::I18n::instance().tr("accessibility.dialog_hints",
+            "Left and right to change. A to confirm. B to cancel.");
     }
 }
 

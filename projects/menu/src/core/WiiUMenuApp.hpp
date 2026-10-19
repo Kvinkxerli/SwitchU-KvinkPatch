@@ -197,6 +197,10 @@ private:
     void previewLeaveCaptureTitle(std::uint64_t titleId);
     LeaveFrameSession captureLeaveSession() const;
     bool saveLeaveFrame(nxui::Renderer& ren);
+    // The leave-frame file (~3.5 MB) is written on a worker so the resume /
+    // launch animation does not stall on the SD card. Anything that hands the
+    // screen over to another process must call this first.
+    void waitLeaveFrameWrite();
     void restoreLeaveSession();
     void setLeaveMotionFrozen(bool frozen);
     void updateLeaveSplashHandoff(float dt);
@@ -646,6 +650,7 @@ private:
     std::vector<AccountUid> m_pendingProfileUids;
     std::size_t m_pendingProfileIndex = 0;
     std::future<void> m_accessibilityFuture;
+    std::future<bool> m_leaveFrameWriteFuture;
     bool m_accessibilityReady = false;
     std::uint64_t m_fastReturnStartupTick = 0;
 

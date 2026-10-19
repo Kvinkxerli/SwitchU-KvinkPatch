@@ -74,7 +74,26 @@
       "month": "Mes",
       "day": "Día",
       "hour": "Hora",
-      "minute": "Minuto"
+      "minute": "Minuto",
+      "timezone_button": "Cambiar",
+      "timezone_desc": "Elige una zona horaria.",
+      "timezone_filter_title": "Filtrar zonas horarias",
+      "timezone_filter_guide": "Escribe para filtrar (p. ej., New_York). Déjalo vacío para ver todas.",
+      "timezone_filter_option": "Buscar",
+      "timezone_popup_hint": "Izquierda para buscar. Arriba/abajo para elegir. A para confirmar.",
+      "timezone_popup_footer": "A Confirmar   ·   B Cancelar",
+      "timezone_none": "No hay zonas horarias que coincidan.",
+      "timezone_failed": "No se pudo cambiar la zona horaria.",
+      "timezone_saved": "Zona horaria actualizada.",
+      "web_time": "Sincronizar reloj mediante servidores públicos",
+      "web_time_desc": "Ajusta el reloj mediante HTTPS público (funciona con bloqueo de DNS)",
+      "web_time_button": "Sincronizar ahora",
+      "web_time_working": "Sincronizando el reloj desde la web...",
+      "web_time_busy": "La sincronización del reloj ya está en curso.",
+      "web_time_failed": "No se pudo sincronizar el reloj desde la web.",
+      "web_time_saved": "Reloj sincronizado desde la web.",
+      "manual_time_disable_sync_title": "¿Desactivar la sincronización del reloj?",
+      "manual_time_disable_sync_msg": "Se desactivará la sincronización. ¿Continuar?"
     },
     "audio": {
       "speaker_auto_mute": "Auto-mute de altavoces",
@@ -314,14 +333,18 @@
       "cancelling": "Cancelando...",
       "scan_cancelled": "Búsqueda de arte cancelada.",
       "api_key_guide": "Ingrese su clave de API",
-      "search_failed": "La búsqueda falló. Si HTTPS sigue fallando, revisa el reloj de la consola en Ajustes > Sistema."
+      "search_failed": "La búsqueda falló. Si HTTPS sigue fallando, revisa el reloj de la consola en Ajustes > Sistema.",
+      "https_clock_hint": "Falló HTTPS. Si el reloj de la consola es incorrecto, corrígelo en Ajustes > Sistema; prueba «Sincronizar reloj mediante servidores públicos».",
+      "https_clock_title": "No se pudo conectar con SteamGridDB"
     },
     "loading_tab": "Cargando esta sección en segundo plano."
   },
   "userselect": {
     "title": "¿Quién está jugando?",
     "add_user": "Añadir usuario",
-    "add_user_hint": "A para crear un usuario nuevo."
+    "add_user_hint": "A para crear un usuario nuevo.",
+    "profile_fallback": "Perfil",
+    "accessibility_hints": "Izquierda y derecha para cambiar de perfil. A para confirmar. B para cancelar."
   },
   "game": {
     "move": "Mover",
@@ -635,7 +658,8 @@
     "position": {
       "row": "fila",
       "column": "columna",
-      "item": "elemento"
+      "item": "elemento",
+      "of": "de"
     },
     "move_mode": {
       "enter": "Moviendo juego: ",
@@ -649,7 +673,8 @@
     "layout": {
       "grid": "Modo cuadrícula",
       "dynamic_line": "Modo línea dinámica"
-    }
+    },
+    "dialog_hints": "Izquierda y derecha para cambiar. A para confirmar. B para cancelar."
   },
   "tutorial": {
     "accessibility": {

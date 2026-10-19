@@ -238,7 +238,9 @@
     }
   },
   "userselect": {
-    "title": "Wie speelt er?"
+    "title": "Wie speelt er?",
+    "profile_fallback": "Profiel",
+    "accessibility_hints": "Links en rechts om van profiel te wisselen. A om te bevestigen. B om te annuleren."
   },
   "game": {
     "move": "Verplaatsen",
@@ -460,7 +462,8 @@
     },
     "position": {
       "row": "rij",
-      "column": "kolom"
+      "column": "kolom",
+      "of": "van"
     },
     "move_mode": {
       "enter": "Spel verplaatsen: ",
@@ -470,7 +473,8 @@
     "grid": {
       "empty_slot": "Leeg vak"
     },
-    "user_profile": "Gebruikersprofiel"
+    "user_profile": "Gebruikersprofiel",
+    "dialog_hints": "Links en rechts om te wisselen. A om te bevestigen. B om te annuleren."
   },
   "tutorial": {
     "accessibility": {

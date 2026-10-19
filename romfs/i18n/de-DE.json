@@ -238,7 +238,9 @@
     }
   },
   "userselect": {
-    "title": "Wer spielt?"
+    "title": "Wer spielt?",
+    "profile_fallback": "Profil",
+    "accessibility_hints": "Links und rechts, um das Profil zu wechseln. A zum Bestätigen. B zum Abbrechen."
   },
   "game": {
     "move": "Verschieben",
@@ -460,7 +462,8 @@
     },
     "position": {
       "row": "Zeile",
-      "column": "Spalte"
+      "column": "Spalte",
+      "of": "von"
     },
     "move_mode": {
       "enter": "Spiel verschieben: ",
@@ -470,7 +473,8 @@
     "grid": {
       "empty_slot": "Leeres Feld"
     },
-    "user_profile": "Benutzerprofil"
+    "user_profile": "Benutzerprofil",
+    "dialog_hints": "Links und rechts zum Wechseln. A zum Bestätigen. B zum Abbrechen."
   },
   "tutorial": {
     "accessibility": {
