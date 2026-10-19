@@ -333,12 +333,12 @@ std::string I18n::detectSystemLanguageTag() {
         case SetLanguage_ZHCN:  return "zh-CN";
         case SetLanguage_KO:    return "ko-KR";
         case SetLanguage_NL:    return "nl-NL";
-        case SetLanguage_PT:    return "pt-PT";
+        case SetLanguage_PT:    return "pt-BR";
         case SetLanguage_RU:    return "ru-RU";
         case SetLanguage_ZHTW:  return "zh-TW";
-        case SetLanguage_ENGB:  return "en-GB";
-        case SetLanguage_FRCA:  return "fr-CA";
-        case SetLanguage_ES419: return "es-419";
+        case SetLanguage_ENGB:  return "en-US";
+        case SetLanguage_FRCA:  return "fr-FR";
+        case SetLanguage_ES419: return "es-ES";
         case SetLanguage_ZHHANS:return "zh-CN";
         case SetLanguage_ZHHANT:return "zh-TW";
         case SetLanguage_PTBR:  return "pt-BR";

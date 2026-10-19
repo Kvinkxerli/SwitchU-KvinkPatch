@@ -715,8 +715,8 @@ void TutorialActivity::drawNavigationGrid(nxui::Renderer& ren) {
     if (m_navCursor && m_navCursor->isVisible())
         m_navCursor->render(ren);
 
-    drawCheckRow(ren, "Gauche / droite", m_navLeftRight, objective.x + 34.f, objective.y + 232.f, 1.f);
-    drawCheckRow(ren, "Haut / bas", m_navUpDown, objective.x + 34.f, objective.y + 266.f, 1.f);
+    drawCheckRow(ren, nxui::I18n::instance().tr("tutorial.navigation.left_right", "Left / right"), m_navLeftRight, objective.x + 34.f, objective.y + 232.f, 1.f);
+    drawCheckRow(ren, nxui::I18n::instance().tr("tutorial.navigation.up_down", "Up / down"), m_navUpDown, objective.x + 34.f, objective.y + 266.f, 1.f);
 }
 
 void TutorialActivity::drawMainPanelContent(nxui::Renderer& ren,
@@ -756,7 +756,7 @@ void TutorialActivity::drawObjectivePanelContent(nxui::Renderer& ren, const Step
 
     nxui::Rect objective = m_objectivePanel->rect();
     ren.pushClipRect(objective.shrunk(16.f));
-    ren.drawText("Test", {objective.x + 24.f, objective.y + 24.f}, &m_fontSmall,
+    ren.drawText(nxui::I18n::instance().tr("tutorial.test_label", "Test"), {objective.x + 24.f, objective.y + 24.f}, &m_fontSmall,
                  m_theme.textSecondary.withAlpha(0.80f), 0.78f);
 
     auto objectiveLines = wrapText(step.objective, m_fontSmall, objective.width - 48.f, 0.70f);
@@ -771,7 +771,7 @@ void TutorialActivity::drawObjectivePanelContent(nxui::Renderer& ren, const Step
     if (step.kind == StepKind::NavigationTest) {
         drawNavigationGrid(ren);
     } else if (step.kind == StepKind::ConfirmTest) {
-        drawCheckRow(ren, "Bouton A detecte", step.complete, objective.x + 24.f, cy, 1.f);
+        drawCheckRow(ren, nxui::I18n::instance().tr("tutorial.confirm.detected", "A button detected"), step.complete, objective.x + 24.f, cy, 1.f);
     }
     ren.popClipRect();
 }
@@ -783,7 +783,7 @@ void TutorialActivity::onRender(nxui::Renderer& ren) {
     const Step& step = m_steps[(size_t)m_stepIndex];
     const std::string visible = step.body.substr(0, std::min(m_visibleChars, step.body.size()));
 
-    ren.drawText("Tutoriel SwitchU", {76.f, 50.f}, &m_fontBody,
+    ren.drawText(nxui::I18n::instance().tr("tutorial.header", "SwitchU tutorial"), {76.f, 50.f}, &m_fontBody,
                  m_theme.textSecondary.withAlpha(0.82f), 0.92f);
     ren.drawText(step.title, {76.f, 128.f}, &m_fontTitle,
                  m_theme.textPrimary, 1.f);

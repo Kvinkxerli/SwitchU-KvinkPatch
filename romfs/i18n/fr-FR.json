@@ -92,6 +92,8 @@
     "user_profile": "Profil utilisateur"
   },
   "tutorial": {
+    "header": "Tutoriel SwitchU",
+    "test_label": "Test",
     "accessibility": {
       "title": "Accessibilité vocale",
       "body": "La lecture vocale est disponible pour ce menu. Elle peut lire l'élément sélectionné et les actions disponibles à voix haute.",
@@ -112,12 +114,15 @@
     "navigation": {
       "title": "Navigation",
       "body": "Tu peux naviguer avec la croix directionnelle, le stick gauche ou le stick droit. Essaie une direction horizontale et une direction verticale.",
-      "objective": "Teste une direction gauche ou droite puis haut ou bas."
+      "objective": "Teste une direction gauche ou droite puis haut ou bas.",
+      "left_right": "Gauche / droite",
+      "up_down": "Haut / bas"
     },
     "confirm": {
       "title": "Valider",
       "body": "Le bouton A confirme une action, lance un jeu ou ouvre l'élément sélectionné.",
-      "objective": "Appuie sur A pour valider cette étape."
+      "objective": "Appuie sur A pour valider cette étape.",
+      "detected": "Bouton A détecté"
     },
     "themes": {
       "title": "Thèmes",

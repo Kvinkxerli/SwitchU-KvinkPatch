@@ -93,6 +93,8 @@
     "user_profile": "User profile"
   },
   "tutorial": {
+    "header": "SwitchU tutorial",
+    "test_label": "Test",
     "accessibility": {
       "title": "Voice guidance",
       "body": "Voice guidance is available for this menu. It can read the selected item and the available actions aloud.",
@@ -113,12 +115,15 @@
     "navigation": {
       "title": "Navigation",
       "body": "You can navigate with the directional pad, left stick, or right stick. Try one horizontal direction and one vertical direction.",
-      "objective": "Try left or right, then up or down."
+      "objective": "Try left or right, then up or down.",
+      "left_right": "Left / right",
+      "up_down": "Up / down"
     },
     "confirm": {
       "title": "Confirm",
       "body": "The A button confirms an action, launches a game, or opens the selected item.",
-      "objective": "Press A to validate this step."
+      "objective": "Press A to validate this step.",
+      "detected": "A button detected"
     },
     "themes": {
       "title": "Themes",
