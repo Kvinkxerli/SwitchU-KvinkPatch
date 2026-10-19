@@ -847,7 +847,20 @@ static Result launchPendingHomeMenu() {
     g_pendingHomeMenuSource = nullptr;
     g_pendingHomeMenuStartedAt = 0;
 
-    const auto status = buildSystemStatus();
+    auto status = buildSystemStatus();
+    // A forwarder (homebrew wrapped as an application, title id outside the
+    // retail 0x01... range) left suspended keeps the menu applet from coming up:
+    // the menu process hangs before it can mount the SD and the console freezes
+    // on the forwarder's last frame. Close it on HOME instead of suspending it.
+    if (daemon::app::isRunning() && (daemon::app::suspendedTitleId() >> 56) != 0x01) {
+        const uint64_t forwarderId = daemon::app::suspendedTitleId();
+        switchu::FileLog::log("[%s] HOME over forwarder 0x%016lX: closing it before the menu",
+                              source, forwarderId);
+        // Forwarders often ignore RequestExit; do not wait the full graceful timeout.
+        const Result closeRc = daemon::app::terminate(2'000'000'000ULL);
+        switchu::FileLog::log("[%s] forwarder close rc=0x%X", source, closeRc);
+        status = buildSystemStatus();
+    }
     switchu::FileLog::log(
         "[%s] HOME foreground acquired; launching MainMenu status.running=%d suspended=0x%016lX",
         source, status.app_running ? 1 : 0, status.suspended_app_id);
