@@ -23,6 +23,7 @@ public:
     using AcceptCallback = std::function<void(const std::string&)>;
     using VoidCallback = std::function<void()>;
     using StringCallback = std::function<void(const std::string&)>;
+    using LayoutCallback = std::function<void(bool fullLayout)>;
 
     struct Request {
         std::string title;
@@ -38,12 +39,19 @@ public:
     void setSmallFont(nxui::Font* font) { m_smallFont = font; }
     void setTheme(const nxui::Theme* theme);
 
+    void setFullLayout(bool full);
+    bool fullLayout() const { return m_fullLayout; }
+    void setGlassStyle(bool glass);
+    bool glassStyle() const { return m_glassStyle; }
+
     void onAccept(AcceptCallback cb) { m_acceptCb = std::move(cb); }
     void onCancel(VoidCallback cb) { m_cancelCb = std::move(cb); }
     void onKeySfx(VoidCallback cb) { m_keySfxCb = std::move(cb); }
     void onNavigateSfx(VoidCallback cb) { m_navigateSfxCb = std::move(cb); }
     void onCloseSfx(VoidCallback cb) { m_closeSfxCb = std::move(cb); }
     void onAccessibilityAnnouncement(StringCallback cb) { m_accessibilityCb = std::move(cb); }
+    void onLayoutModeChanged(LayoutCallback cb) { m_layoutCb = std::move(cb); }
+    void onGlassStyleChanged(LayoutCallback cb) { m_styleCb = std::move(cb); }
 
     void show(const Request& request);
     void hide(bool accepted);
@@ -87,18 +95,43 @@ private:
     Metrics metrics() const;
     const std::vector<std::vector<Key>>& rows() const;
     nxui::Rect keyRect(int row, int column) const;
+    nxui::Rect styleToggleRect() const;
+    nxui::Rect sizeToggleRect() const;
     nxui::Rect cancelChipRect() const;
     nxui::Rect keyboardBoardRect() const;
+    nxui::Rect textFieldRect() const;
+    nxui::Rect clearButtonRect() const;
+    nxui::Rect revealButtonRect() const;
+    float fieldTrailingReserve() const;
+    float counterScale() const;
+    float hintScale() const;
+    float guideScale() const;
     void moveSelection(int dx, int dy);
     void togglePage();
+    void toggleSizeMode();
+    void toggleGlassStyle();
+    void togglePasswordReveal();
     void pressSelected();
     void pressKey(const Key& key);
     void appendText(const std::string& utf8);
     void backspace();
+    void clearText();
+    void deleteSelection();
     void beginBackspaceHold();
     void updateBackspaceHold(float dt, bool held);
     void announceSelection();
+    void enterTextField();
+    void leaveTextField();
+    void moveCaret(int delta, bool extendSelection);
+    void setCaret(int codepointIndex, bool extendSelection);
+    void clearSelection();
+    bool hasSelection() const;
+    int selectionStart() const;
+    int selectionEnd() const;
+    void selectAll();
+    int caretFromFieldX(float x) const;
     std::string displayText() const;
+    std::string displayPrefix(int codepoints) const;
     std::string keyLabel(const Key& key) const;
     int textLength() const;
 
@@ -110,20 +143,32 @@ private:
     bool m_animatingOut = false;
     bool m_backdropReady = false;
     bool m_accepted = false;
+    bool m_fullLayout = true;
+    bool m_glassStyle = true;
     nxui::AnimatedFloat m_alpha;
 
     Request m_request;
     std::string m_text;
     bool m_shift = false;
     bool m_shiftLock = false;
-    int m_page = 0;          // 0 letters, 1 symbols and accented vowels
+    bool m_passwordRevealed = false;
+    bool m_focusField = false;
+    int m_caret = 0;          // codepoint index into m_text
+    int m_selAnchor = -1;     // -1 = no selection; else codepoint anchor
+    int m_page = 0;           // 0 letters, 1 symbols and accented vowels
     int m_row = 0;
     int m_column = 0;
     float m_caretTime = 0.f;
     int m_touchRow = -1;
     int m_touchColumn = -1;
     bool m_waitingForTouchRelease = false;
+    bool m_touchOnStyleToggle = false;
+    bool m_touchOnSizeToggle = false;
     bool m_touchOnCancelChip = false;
+    bool m_touchOnClear = false;
+    bool m_touchOnReveal = false;
+    bool m_touchOnField = false;
+    bool m_fieldSelecting = false;
     bool m_backspaceHeld = false;
     float m_backspaceHoldTime = 0.f;
     float m_backspaceRepeatLeft = 0.f;
@@ -137,6 +182,8 @@ private:
     VoidCallback m_navigateSfxCb;
     VoidCallback m_closeSfxCb;
     StringCallback m_accessibilityCb;
+    LayoutCallback m_layoutCb;
+    LayoutCallback m_styleCb;
 
     static constexpr int kColumns = 10;
 };

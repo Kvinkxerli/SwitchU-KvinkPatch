@@ -632,6 +632,10 @@ void AudioManager::playCurrentInternal(bool fromStart) {
 void AudioManager::play() {
     std::lock_guard<std::mutex> lk(m_trackMutex);
     if (m_tracks.empty()) return;
+    // HOME / overlay dismiss used to call play() while music was already
+    // running; Mix_PlayMusic again caused an audible skip.
+    if (m_playing.load() && Mix_PlayingMusic())
+        return;
     playCurrentInternal(m_positionSeconds <= 0.05f);
 }
 

@@ -64,6 +64,10 @@ public:
     void setMotionPaused(bool paused) { m_motionPaused = paused; }
     bool motionPaused() const { return m_motionPaused; }
 
+    /// Shapes (+ optional theme image) without the opaque gradient fill —
+    /// for compositing over blurred letterbox regions.
+    void renderLetterboxOverlay(nxui::Renderer& ren, float opacityMul = 1.f);
+
     void regenerate(int count = 50) override;
 
 protected:

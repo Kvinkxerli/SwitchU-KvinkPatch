@@ -727,6 +727,10 @@ void WiiUMenuApp::createQuickSettings() {
     callbacks.onMusicQueryFolderCover = [this](const std::string& folder) -> const std::vector<uint8_t>* {
         return m_audio.folderCoverArt(folder);
     };
+    callbacks.onRenderMenuBackground = [this](nxui::Renderer& ren, float alpha) {
+        if (m_background)
+            m_background->renderLetterboxOverlay(ren, alpha);
+    };
     callbacks.onSleepRequested = [this]() {
         if (!m_dialog) return;
         auto& i18n = nxui::I18n::instance();

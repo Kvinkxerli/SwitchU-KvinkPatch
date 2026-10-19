@@ -28,6 +28,23 @@ int countCodepoints(const std::string& text) {
     return count;
 }
 
+std::size_t byteOffsetForCodepoint(const std::string& text, int codepointIndex) {
+    if (codepointIndex <= 0)
+        return 0;
+    int count = 0;
+    for (std::size_t i = 0; i < text.size();) {
+        if (count == codepointIndex)
+            return i;
+        i += static_cast<std::size_t>(sequenceLength(static_cast<unsigned char>(text[i])));
+        ++count;
+    }
+    return text.size();
+}
+
+std::string utf8Prefix(const std::string& text, int codepoints) {
+    return text.substr(0, byteOffsetForCodepoint(text, std::max(0, codepoints)));
+}
+
 } // namespace
 
 TextEntryScreen::TextEntryScreen() {
@@ -59,20 +76,37 @@ void TextEntryScreen::setTheme(const nxui::Theme* theme) {
 }
 
 TextEntryScreen::Metrics TextEntryScreen::metrics() const {
-    // The keyboard is always drawn in the compact, flat style.
     Metrics m;
-    m.panelX = 64.f;
-    m.panelY = 70.f;
-    m.panelW = 1152.f;
-    m.panelH = 580.f;
-    m.inset = 26.f;
-    m.keyGap = 6.f;
-    m.rowHeight = 70.f;
-    m.fieldTop = 90.f;
-    m.fieldHeight = 58.f;
-    m.keyboardTop = 162.f;
-    m.keyRadius = 12.f;
-    m.boardPad = 0.f;
+    if (m_fullLayout) {
+        // Large glass sheet — nearly full screen, still a rounded panel so the
+        // frosted look matches the original keyboard language.
+        m.panelX = 28.f;
+        m.panelY = 18.f;
+        m.panelW = 1224.f;
+        m.panelH = 684.f;
+        m.inset = 24.f;
+        m.keyGap = 5.f;
+        m.rowHeight = 86.f;
+        m.fieldTop = 88.f;
+        m.fieldHeight = 64.f;
+        m.keyboardTop = 168.f;
+        m.keyRadius = 12.f;
+        m.boardPad = 0.f;
+    } else {
+        // Compact glass card — denser/taller than the first keyboard, same look.
+        m.panelX = 64.f;
+        m.panelY = 70.f;
+        m.panelW = 1152.f;
+        m.panelH = 580.f;
+        m.inset = 26.f;
+        m.keyGap = 6.f;
+        m.rowHeight = 70.f;
+        m.fieldTop = 90.f;
+        m.fieldHeight = 58.f;
+        m.keyboardTop = 162.f;
+        m.keyRadius = 12.f;
+        m.boardPad = 0.f;
+    }
     return m;
 }
 
@@ -80,6 +114,20 @@ void TextEntryScreen::applyPanelRect() {
     const Metrics m = metrics();
     setRect({m.panelX, m.panelY, m.panelW, m.panelH});
     setCornerRadius(26.f);
+}
+
+void TextEntryScreen::setFullLayout(bool full) {
+    if (m_fullLayout == full)
+        return;
+    m_fullLayout = full;
+    applyPanelRect();
+}
+
+void TextEntryScreen::setGlassStyle(bool glass) {
+    if (m_glassStyle == glass)
+        return;
+    m_glassStyle = glass;
+    m_backdropReady = false;
 }
 
 void TextEntryScreen::buildLayout() {
@@ -201,8 +249,8 @@ const std::vector<std::vector<TextEntryScreen::Key>>& TextEntryScreen::rows() co
 }
 
 void TextEntryScreen::show(const Request& request) {
-    DebugLog::log("[textentry] TextEntryScreen::show title=%s already-active=%d",
-                  request.title.c_str(), m_active);
+    DebugLog::log("[textentry] TextEntryScreen::show title=%s already-active=%d full=%d",
+                  request.title.c_str(), m_active, m_fullLayout);
     if (m_active)
         return;
     buildLayout();
@@ -213,12 +261,22 @@ void TextEntryScreen::show(const Request& request) {
     m_accepted = false;
     m_shift = false;
     m_shiftLock = false;
+    m_passwordRevealed = false;
+    m_focusField = false;
+    m_caret = textLength();
+    m_selAnchor = -1;
     m_page = 0;
     m_row = 1;
     m_column = 0;
     m_caretTime = 0.f;
     m_touchRow = m_touchColumn = -1;
+    m_touchOnStyleToggle = false;
+    m_touchOnSizeToggle = false;
     m_touchOnCancelChip = false;
+    m_touchOnClear = false;
+    m_touchOnReveal = false;
+    m_touchOnField = false;
+    m_fieldSelecting = false;
     m_waitingForTouchRelease = true;
     m_backspaceHeld = false;
     m_backspaceHoldTime = 0.f;
@@ -233,8 +291,8 @@ void TextEntryScreen::show(const Request& request) {
         auto& i18n = nxui::I18n::instance();
         m_accessibilityCb(request.title + ". " +
             i18n.tr("text_entry.opened",
-                    "On-screen keyboard. Directional pad to choose a key, A to type, "
-                    "X to erase, Plus to confirm, B to cancel."));
+                    "On-screen keyboard. Up into the text field to move the caret. "
+                    "A to type, X to erase, Plus to confirm, B to cancel."));
     }
 }
 
@@ -258,21 +316,58 @@ void TextEntryScreen::setupActions() {
     addDirectionAction(nxui::FocusDirection::LEFT, [this]() { moveSelection(-1, 0); });
     addDirectionAction(nxui::FocusDirection::RIGHT, [this]() { moveSelection(1, 0); });
 
-    addAction(static_cast<std::uint64_t>(nxui::Button::A), [this]() { pressSelected(); });
+    addAction(static_cast<std::uint64_t>(nxui::Button::A), [this]() {
+        if (m_focusField) {
+            leaveTextField();
+            return;
+        }
+        pressSelected();
+    });
     addAction(static_cast<std::uint64_t>(nxui::Button::B), [this]() { hide(false); });
     addAction(static_cast<std::uint64_t>(nxui::Button::X), [this]() {
         backspace();
         beginBackspaceHold();
     });
     addAction(static_cast<std::uint64_t>(nxui::Button::Y), [this]() {
+        if (m_focusField) {
+            // Y while editing text: select all (handy before replace/clear).
+            selectAll();
+            if (m_keySfxCb) m_keySfxCb();
+            return;
+        }
         Key shiftKey;
         shiftKey.action = Action::Shift;
         shiftKey.span = 1;
         pressKey(shiftKey);
     });
-    addAction(static_cast<std::uint64_t>(nxui::Button::L), [this]() { togglePage(); });
-    addAction(static_cast<std::uint64_t>(nxui::Button::R), [this]() { togglePage(); });
+    addAction(static_cast<std::uint64_t>(nxui::Button::L), [this]() {
+        if (m_focusField) {
+            moveCaret(-1, true);
+            return;
+        }
+        togglePage();
+    });
+    addAction(static_cast<std::uint64_t>(nxui::Button::R), [this]() {
+        if (m_focusField) {
+            moveCaret(+1, true);
+            return;
+        }
+        togglePage();
+    });
     addAction(static_cast<std::uint64_t>(nxui::Button::Plus), [this]() { hide(true); });
+    addAction(static_cast<std::uint64_t>(nxui::Button::Minus), [this]() {
+        // Password fields: Minus toggles show/hide (size still via the Size chip).
+        if (m_request.password) {
+            togglePasswordReveal();
+            return;
+        }
+        toggleSizeMode();
+    });
+    addAction(static_cast<std::uint64_t>(nxui::Button::ZR), [this]() { toggleGlassStyle(); });
+    addAction(static_cast<std::uint64_t>(nxui::Button::ZL), [this]() {
+        if (!m_text.empty())
+            clearText();
+    });
 }
 
 nxui::Rect TextEntryScreen::keyRect(int row, int column) const {
@@ -309,6 +404,19 @@ nxui::Rect TextEntryScreen::keyboardBoardRect() const {
             panel.width - m.inset * 2.f, rowsH};
 }
 
+nxui::Rect TextEntryScreen::styleToggleRect() const {
+    const Metrics m = metrics();
+    const nxui::Rect panel = rect();
+    // Leftmost of the three chrome chips: Style | Size | Cancel
+    return {panel.right() - m.inset - 346.f, panel.y + 18.f, 106.f, 40.f};
+}
+
+nxui::Rect TextEntryScreen::sizeToggleRect() const {
+    const Metrics m = metrics();
+    const nxui::Rect panel = rect();
+    return {panel.right() - m.inset - 228.f, panel.y + 18.f, 106.f, 40.f};
+}
+
 nxui::Rect TextEntryScreen::cancelChipRect() const {
     const Metrics m = metrics();
     const nxui::Rect panel = rect();
@@ -324,12 +432,58 @@ void TextEntryScreen::togglePage() {
     if (m_keySfxCb) m_keySfxCb();
 }
 
+void TextEntryScreen::toggleSizeMode() {
+    m_fullLayout = !m_fullLayout;
+    applyPanelRect();
+    m_backdropReady = false;
+    if (m_keySfxCb) m_keySfxCb();
+    if (m_layoutCb) m_layoutCb(m_fullLayout);
+    if (m_accessibilityCb) {
+        auto& i18n = nxui::I18n::instance();
+        m_accessibilityCb(m_fullLayout
+            ? i18n.tr("text_entry.layout_full", "Full keyboard")
+            : i18n.tr("text_entry.layout_compact", "Compact keyboard"));
+    }
+}
+
+void TextEntryScreen::toggleGlassStyle() {
+    m_glassStyle = !m_glassStyle;
+    m_backdropReady = false;
+    if (m_keySfxCb) m_keySfxCb();
+    if (m_styleCb) m_styleCb(m_glassStyle);
+    if (m_accessibilityCb) {
+        auto& i18n = nxui::I18n::instance();
+        m_accessibilityCb(m_glassStyle
+            ? i18n.tr("text_entry.style_glass", "Glass keyboard")
+            : i18n.tr("text_entry.style_flat", "Flat keyboard"));
+    }
+}
+
 void TextEntryScreen::moveSelection(int dx, int dy) {
     if (!m_active || m_animatingOut)
         return;
+
+    if (m_focusField) {
+        if (dy > 0) {
+            leaveTextField();
+            return;
+        }
+        if (dx != 0) {
+            // Hold Shift (or Y-shifted state) extends the selection.
+            moveCaret(dx, m_shift || m_shiftLock);
+            return;
+        }
+        return;
+    }
+
     const auto& all = rows();
     if (all.empty())
         return;
+
+    if (dy < 0 && m_row == 0) {
+        enterTextField();
+        return;
+    }
 
     if (dy != 0) {
         const auto& from = all[static_cast<std::size_t>(m_row)];
@@ -416,26 +570,232 @@ void TextEntryScreen::pressKey(const Key& key) {
 void TextEntryScreen::appendText(const std::string& utf8) {
     if (utf8.empty())
         return;
+    if (hasSelection())
+        deleteSelection();
     if (textLength() >= std::max(1, m_request.maxLength)) {
         if (m_accessibilityCb)
             m_accessibilityCb(nxui::I18n::instance().tr("text_entry.full",
                                                         "Maximum length reached"));
         return;
     }
-    m_text += utf8;
+    const std::size_t at = byteOffsetForCodepoint(m_text, m_caret);
+    m_text.insert(at, utf8);
+    ++m_caret;
+    m_caret = std::clamp(m_caret, 0, textLength());
+    clearSelection();
     m_caretTime = 0.f;
     if (m_keySfxCb) m_keySfxCb();
 }
 
 void TextEntryScreen::backspace() {
-    if (!m_active || m_animatingOut || m_text.empty())
+    if (!m_active || m_animatingOut)
         return;
-    std::size_t cut = m_text.size() - 1;
-    while (cut > 0 && (static_cast<unsigned char>(m_text[cut]) & 0xC0u) == 0x80u)
-        --cut;
-    m_text.erase(cut);
+    if (hasSelection()) {
+        deleteSelection();
+        if (m_keySfxCb) m_keySfxCb();
+        return;
+    }
+    if (m_text.empty() || m_caret <= 0)
+        return;
+    const std::size_t end = byteOffsetForCodepoint(m_text, m_caret);
+    const std::size_t begin = byteOffsetForCodepoint(m_text, m_caret - 1);
+    m_text.erase(begin, end - begin);
+    --m_caret;
     m_caretTime = 0.f;
     if (m_keySfxCb) m_keySfxCb();
+}
+
+void TextEntryScreen::clearText() {
+    if (m_text.empty())
+        return;
+    m_text.clear();
+    m_caret = 0;
+    clearSelection();
+    m_caretTime = 0.f;
+    if (m_keySfxCb) m_keySfxCb();
+}
+
+void TextEntryScreen::deleteSelection() {
+    if (!hasSelection())
+        return;
+    const int start = selectionStart();
+    const int end = selectionEnd();
+    const std::size_t b0 = byteOffsetForCodepoint(m_text, start);
+    const std::size_t b1 = byteOffsetForCodepoint(m_text, end);
+    m_text.erase(b0, b1 - b0);
+    m_caret = start;
+    clearSelection();
+    m_caretTime = 0.f;
+}
+
+void TextEntryScreen::enterTextField() {
+    m_focusField = true;
+    m_caretTime = 0.f;
+    if (m_navigateSfxCb) m_navigateSfxCb();
+    if (m_accessibilityCb)
+        m_accessibilityCb(nxui::I18n::instance().tr(
+            "text_entry.field_focus",
+            "Text field. Left and Right move the caret. L and R select. Y select all. A returns to keys."));
+}
+
+void TextEntryScreen::leaveTextField() {
+    if (!m_focusField)
+        return;
+    m_focusField = false;
+    m_row = 0;
+    m_column = 0;
+    if (m_navigateSfxCb) m_navigateSfxCb();
+    announceSelection();
+}
+
+void TextEntryScreen::clearSelection() {
+    m_selAnchor = -1;
+}
+
+bool TextEntryScreen::hasSelection() const {
+    return m_selAnchor >= 0 && m_selAnchor != m_caret;
+}
+
+int TextEntryScreen::selectionStart() const {
+    if (!hasSelection())
+        return m_caret;
+    return std::min(m_selAnchor, m_caret);
+}
+
+int TextEntryScreen::selectionEnd() const {
+    if (!hasSelection())
+        return m_caret;
+    return std::max(m_selAnchor, m_caret);
+}
+
+void TextEntryScreen::selectAll() {
+    if (m_text.empty()) {
+        clearSelection();
+        m_caret = 0;
+        return;
+    }
+    m_selAnchor = 0;
+    m_caret = textLength();
+    m_caretTime = 0.f;
+}
+
+void TextEntryScreen::setCaret(int codepointIndex, bool extendSelection) {
+    const int len = textLength();
+    const int next = std::clamp(codepointIndex, 0, len);
+    if (extendSelection) {
+        if (m_selAnchor < 0)
+            m_selAnchor = m_caret;
+    } else {
+        clearSelection();
+    }
+    m_caret = next;
+    m_caretTime = 0.f;
+}
+
+void TextEntryScreen::moveCaret(int delta, bool extendSelection) {
+    setCaret(m_caret + delta, extendSelection);
+    if (m_navigateSfxCb) m_navigateSfxCb();
+}
+
+void TextEntryScreen::togglePasswordReveal() {
+    if (!m_request.password)
+        return;
+    m_passwordRevealed = !m_passwordRevealed;
+    if (m_keySfxCb) m_keySfxCb();
+    if (m_accessibilityCb) {
+        auto& i18n = nxui::I18n::instance();
+        m_accessibilityCb(m_passwordRevealed
+            ? i18n.tr("text_entry.password_shown", "Password visible")
+            : i18n.tr("text_entry.password_hidden", "Password hidden"));
+    }
+}
+
+nxui::Rect TextEntryScreen::textFieldRect() const {
+    const Metrics m = metrics();
+    const nxui::Rect panel = rect();
+    return {panel.x + m.inset, panel.y + m.fieldTop,
+            panel.width - m.inset * 2.f, m.fieldHeight};
+}
+
+float TextEntryScreen::counterScale() const {
+    // Match SteamGridDB body/hint readability (~0.95 on smallFont).
+    return 0.92f;
+}
+
+float TextEntryScreen::hintScale() const {
+    return 0.90f;
+}
+
+float TextEntryScreen::guideScale() const {
+    return 0.92f;
+}
+
+float TextEntryScreen::fieldTrailingReserve() const {
+    char counter[32]{};
+    std::snprintf(counter, sizeof(counter), "%d/%d", textLength(),
+                  std::max(1, m_request.maxLength));
+    float reserve = 16.f;
+    if (m_smallFont)
+        reserve += m_smallFont->measure(counter).x * counterScale() + 10.f;
+    if (!m_text.empty())
+        reserve += 34.f; // clear button
+    if (m_request.password)
+        reserve += 58.f; // show/hide pill
+    return reserve;
+}
+
+nxui::Rect TextEntryScreen::clearButtonRect() const {
+    if (m_text.empty())
+        return {};
+    const nxui::Rect field = textFieldRect();
+    char counter[32]{};
+    std::snprintf(counter, sizeof(counter), "%d/%d", textLength(),
+                  std::max(1, m_request.maxLength));
+    const float counterW = m_smallFont
+        ? m_smallFont->measure(counter).x * counterScale() : 36.f;
+    const float size = 28.f;
+    return {field.right() - 16.f - counterW - 8.f - size,
+            field.y + (field.height - size) * 0.5f, size, size};
+}
+
+nxui::Rect TextEntryScreen::revealButtonRect() const {
+    if (!m_request.password)
+        return {};
+    const nxui::Rect clear = clearButtonRect();
+    const nxui::Rect field = textFieldRect();
+    const float height = 28.f;
+    const float width = 52.f;
+    char counter[32]{};
+    std::snprintf(counter, sizeof(counter), "%d/%d", textLength(),
+                  std::max(1, m_request.maxLength));
+    const float counterW = m_smallFont
+        ? m_smallFont->measure(counter).x * counterScale() : 36.f;
+    const float x = clear.width > 0.f
+        ? clear.x - 6.f - width
+        : field.right() - 16.f - counterW - 8.f - width;
+    return {x, field.y + (field.height - height) * 0.5f, width, height};
+}
+
+int TextEntryScreen::caretFromFieldX(float x) const {
+    if (!m_font)
+        return textLength();
+    const nxui::Rect field = textFieldRect();
+    const float fieldScale = m_fullLayout ? 0.92f : 0.84f;
+    const float textX = field.x + 16.f;
+    const std::string shown = displayText();
+    const int len = textLength();
+    float bestDist = 1e9f;
+    int best = 0;
+    for (int i = 0; i <= len; ++i) {
+        const std::string prefix = displayPrefix(i);
+        const float caretX = textX + m_font->measure(prefix).x * fieldScale;
+        const float dist = std::abs(caretX - x);
+        if (dist < bestDist) {
+            bestDist = dist;
+            best = i;
+        }
+    }
+    return best;
 }
 
 void TextEntryScreen::beginBackspaceHold() {
@@ -465,10 +825,14 @@ int TextEntryScreen::textLength() const {
 }
 
 std::string TextEntryScreen::displayText() const {
-    if (!m_request.password)
-        return m_text;
+    return displayPrefix(textLength());
+}
+
+std::string TextEntryScreen::displayPrefix(int codepoints) const {
+    const int count = std::clamp(codepoints, 0, textLength());
+    if (!m_request.password || m_passwordRevealed)
+        return utf8Prefix(m_text, count);
     std::string masked;
-    const int count = textLength();
     masked.reserve(static_cast<std::size_t>(count) * 3);
     for (int i = 0; i < count; ++i)
         masked += "•";
@@ -526,13 +890,49 @@ void TextEntryScreen::handleTouch(nxui::Input& input) {
     if (!(input.isHeld(nxui::Button::X) || touchBackspaceHeld))
         m_backspaceHeld = false;
 
+    if (m_fieldSelecting && input.isTouching()) {
+        setCaret(caretFromFieldX(input.touchX()), true);
+    }
+
     if (input.touchDown()) {
         m_touchRow = m_touchColumn = -1;
+        m_touchOnStyleToggle = false;
+        m_touchOnSizeToggle = false;
         m_touchOnCancelChip = false;
+        m_touchOnClear = false;
+        m_touchOnReveal = false;
+        m_touchOnField = false;
+        m_fieldSelecting = false;
+        const nxui::Rect clear = clearButtonRect();
+        const nxui::Rect reveal = revealButtonRect();
+        if (clear.width > 0.f && clear.contains(input.touchX(), input.touchY())) {
+            m_touchOnClear = true;
+            return;
+        }
+        if (reveal.width > 0.f && reveal.contains(input.touchX(), input.touchY())) {
+            m_touchOnReveal = true;
+            return;
+        }
+        if (styleToggleRect().contains(input.touchX(), input.touchY())) {
+            m_touchOnStyleToggle = true;
+            return;
+        }
+        if (sizeToggleRect().contains(input.touchX(), input.touchY())) {
+            m_touchOnSizeToggle = true;
+            return;
+        }
         if (cancelChipRect().contains(input.touchX(), input.touchY())) {
             m_touchOnCancelChip = true;
             return;
         }
+        if (textFieldRect().contains(input.touchX(), input.touchY())) {
+            m_touchOnField = true;
+            m_fieldSelecting = true;
+            m_focusField = true;
+            setCaret(caretFromFieldX(input.touchX()), false);
+            return;
+        }
+        m_focusField = false;
         for (int row = 0; row < static_cast<int>(all.size()); ++row) {
             const auto& keys = all[static_cast<std::size_t>(row)];
             for (int column = 0; column < static_cast<int>(keys.size()); ++column) {
@@ -553,6 +953,35 @@ void TextEntryScreen::handleTouch(nxui::Input& input) {
     }
 
     if (input.touchUp()) {
+        if (m_touchOnClear) {
+            m_touchOnClear = false;
+            if (clearButtonRect().contains(input.touchX(), input.touchY()))
+                clearText();
+            return;
+        }
+        if (m_touchOnReveal) {
+            m_touchOnReveal = false;
+            if (revealButtonRect().contains(input.touchX(), input.touchY()))
+                togglePasswordReveal();
+            return;
+        }
+        if (m_touchOnField) {
+            m_touchOnField = false;
+            m_fieldSelecting = false;
+            return;
+        }
+        if (m_touchOnStyleToggle) {
+            m_touchOnStyleToggle = false;
+            if (styleToggleRect().contains(input.touchX(), input.touchY()))
+                toggleGlassStyle();
+            return;
+        }
+        if (m_touchOnSizeToggle) {
+            m_touchOnSizeToggle = false;
+            if (sizeToggleRect().contains(input.touchX(), input.touchY()))
+                toggleSizeMode();
+            return;
+        }
         if (m_touchOnCancelChip) {
             m_touchOnCancelChip = false;
             if (cancelChipRect().contains(input.touchX(), input.touchY()))
@@ -614,11 +1043,17 @@ void TextEntryScreen::onRender(nxui::Renderer& ren) {
         m_backdropReady = true;
     }
     ren.drawRect({0.f, 0.f, 1280.f, 720.f},
-                 nxui::Color::black().withAlpha(0.72f * alpha));
-    // Flat: opaque panel for maximum contrast / readability.
-    ren.drawRoundedRect(rect(), m_theme->panelBase.withAlpha(0.96f * alpha), 26.f);
-    ren.drawRoundedRectOutline(rect(), m_theme->panelBorder.withAlpha(0.40f * alpha), 26.f, 1.2f);
-    onContentRender(ren);
+                 nxui::Color::black().withAlpha((m_glassStyle ? 0.62f : 0.72f) * alpha));
+    if (m_glassStyle) {
+        ren.drawOffscreenRounded(2, rect(), 26.f,
+                                 nxui::Color::white().withAlpha(alpha));
+        nxui::GlassWidget::onRender(ren);
+    } else {
+        // Flat: opaque panel for maximum contrast / readability.
+        ren.drawRoundedRect(rect(), m_theme->panelBase.withAlpha(0.96f * alpha), 26.f);
+        ren.drawRoundedRectOutline(rect(), m_theme->panelBorder.withAlpha(0.40f * alpha), 26.f, 1.2f);
+        onContentRender(ren);
+    }
 }
 
 void TextEntryScreen::onContentRender(nxui::Renderer& ren) {
@@ -628,13 +1063,16 @@ void TextEntryScreen::onContentRender(nxui::Renderer& ren) {
     auto& i18n = nxui::I18n::instance();
 
     ren.drawText(m_request.title, {panel.x + 30.f, panel.y + 22.f}, m_font,
-                 m_theme->textPrimary.withAlpha(alpha), 0.96f);
+                 m_theme->textPrimary.withAlpha(alpha), m_fullLayout ? 1.02f : 0.96f);
     if (!m_request.guide.empty())
         ren.drawText(m_request.guide, {panel.x + 30.f, panel.y + 56.f}, m_smallFont,
-                     m_theme->textSecondary.withAlpha(0.86f * alpha), 0.70f);
+                     m_theme->textSecondary.withAlpha(0.86f * alpha), guideScale());
 
     auto drawChip = [&](const nxui::Rect& r, const std::string& label) {
-        ren.drawRoundedRect(r, m_theme->panelHighlight.withAlpha(0.20f * alpha), 10.f);
+        if (m_glassStyle)
+            ren.drawLiquidGlass(2, r, 10.f, m_theme->panelBase.withAlpha(0.16f), alpha, 0.05f);
+        else
+            ren.drawRoundedRect(r, m_theme->panelHighlight.withAlpha(0.20f * alpha), 10.f);
         ren.drawRoundedRectOutline(r, m_theme->panelBorder.withAlpha(0.42f * alpha), 10.f, 1.f);
         const float scale = 0.66f;
         const nxui::Vec2 size = m_smallFont->measure(label);
@@ -643,40 +1081,89 @@ void TextEntryScreen::onContentRender(nxui::Renderer& ren) {
              r.y + (r.height - size.y * scale) * 0.5f},
             m_smallFont, m_theme->textPrimary.withAlpha(alpha), scale);
     };
+    // Chip shows the mode you switch TO (same pattern as Compact/Full).
+    drawChip(styleToggleRect(),
+             m_glassStyle ? i18n.tr("text_entry.style_flat", "Flat")
+                          : i18n.tr("text_entry.style_glass", "Glass"));
+    drawChip(sizeToggleRect(),
+             m_fullLayout ? i18n.tr("text_entry.layout_compact", "Compact")
+                          : i18n.tr("text_entry.layout_full", "Full"));
     drawChip(cancelChipRect(), i18n.tr("button.cancel", "Cancel"));
 
-    const nxui::Rect field{panel.x + m.inset, panel.y + m.fieldTop,
-                           panel.width - m.inset * 2.f, m.fieldHeight};
-    ren.drawRoundedRect(field, m_theme->panelBase.withAlpha(0.40f * alpha), 14.f);
-    ren.drawRoundedRectOutline(field, m_theme->panelBorder.withAlpha(0.42f * alpha), 14.f, 1.2f);
+    const nxui::Rect field = textFieldRect();
+    if (m_glassStyle) {
+        ren.drawLiquidGlass(2, field, 14.f,
+                            m_theme->panelBase.withAlpha(0.16f), alpha, 0.06f);
+    } else {
+        ren.drawRoundedRect(field, m_theme->panelBase.withAlpha(0.40f * alpha), 14.f);
+    }
+    const float fieldOutline = m_focusField ? 0.78f : 0.42f;
+    ren.drawRoundedRectOutline(
+        field,
+        (m_focusField ? m_theme->cursorNormal : m_theme->panelBorder)
+            .withAlpha(fieldOutline * alpha),
+        14.f, m_focusField ? 1.8f : 1.2f);
 
     char counter[32]{};
     std::snprintf(counter, sizeof(counter), "%d/%d", textLength(),
                   std::max(1, m_request.maxLength));
+    const float cScale = counterScale();
     const nxui::Vec2 counterSize = m_smallFont->measure(counter);
-    const float counterWidth = counterSize.x * 0.64f;
+    const float counterWidth = counterSize.x * cScale;
     ren.drawText(counter, {field.right() - 16.f - counterWidth,
-                           field.y + (field.height - counterSize.y * 0.64f) * 0.5f},
-                 m_smallFont, m_theme->textSecondary.withAlpha(0.70f * alpha), 0.64f);
+                           field.y + (field.height - counterSize.y * cScale) * 0.5f},
+                 m_smallFont, m_theme->textSecondary.withAlpha(0.78f * alpha), cScale);
+
+    const nxui::Rect clear = clearButtonRect();
+    if (clear.width > 0.f) {
+        ren.drawCircle({clear.x + clear.width * 0.5f, clear.y + clear.height * 0.5f},
+                       clear.width * 0.42f,
+                       m_theme->panelHighlight.withAlpha(0.28f * alpha), 16);
+        const float cx = clear.x + clear.width * 0.5f;
+        const float cy = clear.y + clear.height * 0.5f;
+        const float arm = clear.width * 0.22f;
+        const nxui::Color xInk = m_theme->textPrimary.withAlpha(0.88f * alpha);
+        ren.drawLine({cx - arm, cy - arm}, {cx + arm, cy + arm}, xInk, 2.2f);
+        ren.drawLine({cx + arm, cy - arm}, {cx - arm, cy + arm}, xInk, 2.2f);
+    }
+
+    const nxui::Rect reveal = revealButtonRect();
+    if (reveal.width > 0.f) {
+        ren.drawRoundedRect(reveal, m_theme->panelHighlight.withAlpha(0.28f * alpha), 10.f);
+        const std::string eye = m_passwordRevealed ? "Hide" : "Show";
+        const float eyeScale = 0.52f;
+        const nxui::Vec2 eyeSize = m_smallFont->measure(eye);
+        ren.drawText(eye,
+            {reveal.x + (reveal.width - eyeSize.x * eyeScale) * 0.5f,
+             reveal.y + (reveal.height - eyeSize.y * eyeScale) * 0.5f},
+            m_smallFont, m_theme->textPrimary.withAlpha(0.88f * alpha), eyeScale);
+    }
 
     const std::string shown = displayText();
-    const float fieldScale = 0.84f;
-    const nxui::Vec2 measured = m_font->measure(shown);
+    const float fieldScale = m_fullLayout ? 0.92f : 0.84f;
     const float textX = field.x + 16.f;
-    const float textY = field.y + (field.height - measured.y * fieldScale) * 0.5f;
+    const float reserve = fieldTrailingReserve();
+    const float clipW = std::max(8.f, field.width - reserve);
+    const nxui::Vec2 measuredFull = m_font->measure(shown.empty() ? "Ay" : shown);
+    const float textY = field.y + (field.height - measuredFull.y * fieldScale) * 0.5f;
+
+    ren.pushClipRect({field.x + 4.f, field.y, clipW - 4.f, field.height});
+    if (hasSelection() && !shown.empty()) {
+        const float sel0 = textX + m_font->measure(displayPrefix(selectionStart())).x * fieldScale;
+        const float sel1 = textX + m_font->measure(displayPrefix(selectionEnd())).x * fieldScale;
+        ren.drawRect({sel0, field.y + 10.f, std::max(2.f, sel1 - sel0), field.height - 20.f},
+                     m_theme->cursorNormal.withAlpha(0.34f * alpha));
+    }
     if (!shown.empty()) {
-        ren.pushClipRect({field.x, field.y,
-                          field.width - counterWidth - 28.f, field.height});
         ren.drawText(shown, {textX, textY}, m_font,
                      m_theme->textPrimary.withAlpha(alpha), fieldScale);
-        ren.popClipRect();
     }
     if (std::fmod(m_caretTime, 1.0f) < 0.55f) {
-        const float caretX = std::min(textX + measured.x * fieldScale + 2.f,
-                                      field.right() - counterWidth - 30.f);
+        const float caretX = textX + m_font->measure(displayPrefix(m_caret)).x * fieldScale + 1.f;
         ren.drawRect({caretX, field.y + 12.f, 2.f, field.height - 24.f},
                      m_theme->cursorNormal.withAlpha(0.92f * alpha));
     }
+    ren.popClipRect();
 
     const auto& all = rows();
     for (int row = 0; row < static_cast<int>(all.size()); ++row) {
@@ -684,22 +1171,34 @@ void TextEntryScreen::onContentRender(nxui::Renderer& ren) {
         for (int column = 0; column < static_cast<int>(keys.size()); ++column) {
             const Key& key = keys[static_cast<std::size_t>(column)];
             const nxui::Rect r = keyRect(row, column);
-            const bool selected = row == m_row && column == m_column;
+            const bool selected = !m_focusField && row == m_row && column == m_column;
             const bool shiftLit = (m_shift || m_shiftLock) && key.action == Action::Shift;
             const bool accept = key.action == Action::Accept;
 
-            nxui::Color fill = m_theme->panelHighlight.withAlpha(0.18f * alpha);
-            if (accept) fill = m_theme->cursorNormal.withAlpha(0.32f * alpha);
-            else if (shiftLit) fill = m_theme->cursorNormal.withAlpha(0.28f * alpha);
-            if (selected) fill = m_theme->cursorNormal.withAlpha(0.55f * alpha);
-            ren.drawRoundedRect(r, fill, m.keyRadius);
+            if (m_glassStyle) {
+                ren.drawLiquidGlass(2, r, m.keyRadius,
+                    m_theme->panelBase.withAlpha(0.14f), alpha, 0.05f);
+                nxui::Color wash = nxui::Color::transparent();
+                if (accept) wash = m_theme->cursorNormal.withAlpha(0.18f * alpha);
+                if (shiftLit) wash = m_theme->cursorNormal.withAlpha(0.25f * alpha);
+                if (selected) wash = m_theme->cursorNormal.withAlpha(0.46f * alpha);
+                if (wash.a > 0.001f) ren.drawRoundedRect(r, wash, m.keyRadius);
+            } else {
+                nxui::Color fill = m_theme->panelHighlight.withAlpha(0.18f * alpha);
+                if (accept) fill = m_theme->cursorNormal.withAlpha(0.32f * alpha);
+                else if (shiftLit) fill = m_theme->cursorNormal.withAlpha(0.28f * alpha);
+                if (selected) fill = m_theme->cursorNormal.withAlpha(0.55f * alpha);
+                ren.drawRoundedRect(r, fill, m.keyRadius);
+            }
             ren.drawRoundedRectOutline(r,
                 (selected ? m_theme->textPrimary : m_theme->panelBorder)
                     .withAlpha((selected ? 0.68f : 0.30f) * alpha), m.keyRadius, 1.f);
 
             const std::string label = keyLabel(key);
             const bool wide = key.action != Action::None;
-            const float labelScale = wide ? 0.60f : 0.80f;
+            const float labelScale = wide
+                ? (m_fullLayout ? 0.68f : 0.60f)
+                : (m_fullLayout ? 0.90f : 0.80f);
             nxui::Font* labelFont = (wide && key.action != Action::Backspace)
                 ? m_smallFont : m_font;
             const nxui::Vec2 size = labelFont->measure(label);
@@ -713,14 +1212,31 @@ void TextEntryScreen::onContentRender(nxui::Renderer& ren) {
     }
 
     const nxui::Rect board = keyboardBoardRect();
-    const float hintY = board.bottom() + 8.f;
-    if (hintY + 20.f < panel.bottom() - 8.f) {
-        const std::string hint = i18n.tr("text_entry.hint",
-            "A type · X erase · Y shift · L/R symbols · + OK · B cancel");
+    const float hScale = hintScale();
+    const float hintY = board.bottom() + 6.f;
+    if (hintY + 28.f < panel.bottom() - 4.f) {
+        std::string hint;
+        if (m_focusField) {
+            hint = m_request.password
+                ? i18n.tr("text_entry.hint_field_password",
+                    "←/→ caret · L/R select · Y all · − show/hide · ZL clear · A keys · + OK · B cancel")
+                : i18n.tr("text_entry.hint_field",
+                    "←/→ caret · L/R select · Y all · ZL clear · A keys · + OK · B cancel");
+        } else if (m_request.password) {
+            hint = i18n.tr("text_entry.hint_password",
+                "↑ field · A type · X erase · Y shift · − show/hide · ZL clear · + OK · B cancel");
+        } else {
+            hint = i18n.tr("text_entry.hint",
+                "↑ field · A type · X erase · Y shift · L/R symbols · − size · ZR style · + OK · B cancel");
+        }
         const nxui::Vec2 hintSize = m_smallFont->measure(hint);
-        const float hintScale = 0.60f;
+        // Shrink slightly if a long localization would overflow the panel.
+        float scale = hScale;
+        const float maxW = panel.width - m.inset * 2.f;
+        if (hintSize.x * scale > maxW)
+            scale = std::max(0.72f, maxW / std::max(1.f, hintSize.x));
         ren.drawText(hint,
-                     {panel.x + (panel.width - hintSize.x * hintScale) * 0.5f, hintY},
-                     m_smallFont, m_theme->textSecondary.withAlpha(0.78f * alpha), hintScale);
+                     {panel.x + (panel.width - hintSize.x * scale) * 0.5f, hintY},
+                     m_smallFont, m_theme->textSecondary.withAlpha(0.86f * alpha), scale);
     }
 }

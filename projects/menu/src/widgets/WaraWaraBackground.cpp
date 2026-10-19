@@ -1,5 +1,6 @@
 #include "WaraWaraBackground.hpp"
 #include "core/DebugLog.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
@@ -288,6 +289,21 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         drawShapeWithSymmetry(ren, s);
 
     ren.flush();
+}
+
+void WaraWaraBackground::renderLetterboxOverlay(nxui::Renderer& ren, float opacityMul) {
+    const float prev = m_opacity;
+    m_opacity = prev * std::clamp(opacityMul, 0.f, 1.f);
+    // Skip the opaque gradient so the blurred cover stays visible in the bars.
+    if (m_backgroundImage.valid() && m_config.imageOpacity > 0.f) {
+        ren.drawTexture(&m_backgroundImage,
+                        backgroundImageRect(),
+                        nxui::Color::white().withAlpha(m_config.imageOpacity * m_opacity * 0.55f));
+    }
+    for (const auto& s : m_shapes)
+        drawShapeWithSymmetry(ren, s);
+    ren.flush();
+    m_opacity = prev;
 }
 
 void WaraWaraBackground::drawShapeWithSymmetry(nxui::Renderer& ren, const Shape& s) const {

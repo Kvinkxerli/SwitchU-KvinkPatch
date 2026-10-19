@@ -259,6 +259,7 @@ private:
     void renderActionHintBar(nxui::Renderer& ren);
     void renderActionHintPanel(nxui::Renderer& ren);
     void renderPageArrows(nxui::Renderer& ren);
+    void renderDeletePageButton(nxui::Renderer& ren);
     bool pagingAvailable();
 
     struct PageArrowAnim {
@@ -270,6 +271,7 @@ private:
     bool m_touchBattery = false;
 
     nxui::Rect pageArrowRect(bool left);
+    nxui::Rect deletePageButtonRect() const;
     void kickPageArrow(int dir);
     bool flipPage(int dir);
     bool addPageAvailable();
@@ -282,6 +284,10 @@ private:
     float m_addPageHold = 0.f;
     bool  m_addPageMode = false;
     bool  m_addPageTouchHold = false;
+    float m_deletePageShow = 0.f;
+    float m_deletePageHold = 0.f;
+    bool  m_touchDeletePage = false;
+    bool  m_deletePageMinusArmed = false; // Minus pressed while empty-page delete is available
     int findTitleIndex(uint64_t titleId) const;
     bool focusTitle(uint64_t titleId, bool instantFocus = false);
     void markSuspendedIcon(uint64_t titleId);
