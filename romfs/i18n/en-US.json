@@ -71,7 +71,8 @@
       "slider_actions": "Left or right to adjust. B to return to tabs.",
       "selector_actions": "A or right to open the list. B to return to tabs.",
       "action_actions": "A to run the action. B to return to tabs.",
-      "action_secondary_actions": "Left and right choose Select or clear. A to activate. B to return to tabs."
+      "action_secondary_actions": "Left and right choose Select or clear. A to activate. B to return to tabs.",
+      "companion_actions": "A to activate. Right for list. B to close."
     },
     "value": {
       "label": "Value",
@@ -170,7 +171,9 @@
     "cancel": "Cancel",
     "fullscreen": "Fullscreen",
     "artwork": "Art",
-    "place": "Place"
+    "place": "Place",
+    "modes": "Modes",
+    "skip": "Skip"
   },
   "settings": {
     "tabs": {
@@ -813,16 +816,29 @@
       "next": "Next"
     }
   },
+  "page": {
+    "minus_hint": "View · hold delete"
+  },
   "text_entry": {
     "backspace": "←",
     "caps": "CAPS",
     "erase": "Erase",
+    "field_focus": "Text field. Left and Right move the caret. L and R select. Y select all. A returns to keys.",
     "full": "Maximum length reached",
-    "hint": "A type · X erase · Y shift · L/R symbols · + OK · B cancel",
+    "hint": "↑ field · A type · X erase · Y shift · L/R symbols · − size · ZR style · + OK · B cancel",
+    "hint_field": "←/→ caret · L/R select · Y all · ZL clear · A keys · + OK · B cancel",
+    "hint_field_password": "←/→ caret · L/R select · Y all · − show/hide · ZL clear · A keys · + OK · B cancel",
+    "hint_password": "↑ field · A type · X erase · Y shift · − show/hide · ZL clear · + OK · B cancel",
+    "layout_compact": "Compact keyboard",
+    "layout_full": "Full keyboard",
     "letters": "ABC",
     "opened": "On-screen keyboard. Directional pad to choose a key, A to type, X to erase, Plus to confirm, B to cancel.",
+    "password_hidden": "Password hidden",
+    "password_shown": "Password visible",
     "shift": "Shift",
     "space": "Space",
+    "style_flat": "Flat keyboard",
+    "style_glass": "Glass keyboard",
     "symbols": "?12#"
   },
   "quicksettings": {
@@ -848,6 +864,7 @@
     "hint_adjust": "Adjust",
     "hint_shortcut": "Quick Settings",
     "music_empty": "No music loaded",
+    "music_idle": "Not playing",
     "prev": "Prev",
     "next": "Next",
     "play_pause": "Play/Pause",

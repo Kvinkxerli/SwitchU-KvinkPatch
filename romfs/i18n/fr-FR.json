@@ -70,7 +70,8 @@
       "toggle_actions": "A pour changer. Gauche pour revenir aux onglets.",
       "slider_actions": "Gauche ou droite pour ajuster. B pour revenir aux onglets.",
       "selector_actions": "A ou droite pour ouvrir la liste. B pour revenir aux onglets.",
-      "action_actions": "A pour lancer l'action. B pour revenir aux onglets."
+      "action_actions": "A pour lancer l'action. B pour revenir aux onglets.",
+      "companion_actions": "A pour activer. Droite pour la liste. B pour fermer."
     },
     "value": {
       "label": "Valeur",
@@ -164,7 +165,9 @@
     "search": "Rechercher",
     "sort_custom": "Mon ordre",
     "sort_alpha": "A-Z",
-    "sort_recent": "Récents"
+    "sort_recent": "Récents",
+    "modes": "Modes",
+    "skip": "Passer"
   },
   "settings": {
     "tabs": {
@@ -779,14 +782,27 @@
       "next": "Suiv."
     }
   },
+  "page": {
+    "minus_hint": "Vue · maintenir pour supprimer"
+  },
   "text_entry": {
     "erase": "Effacer",
+    "field_focus": "Champ de texte. Gauche et droite déplacent le curseur. L et R sélectionnent. Y sélectionne tout. A revient aux touches.",
     "full": "Longueur maximale atteinte",
-    "hint": "A : saisir   X : effacer   Y : majuscule   L/R : symboles   Plus : confirmer   B : annuler",
+    "hint": "↑ champ · A saisir · X effacer · Y majuscule · L/R symboles · − taille · ZR style · + OK · B annuler",
+    "hint_field": "←/→ curseur · L/R sélection · Y tout · ZL effacer · A touches · + OK · B annuler",
+    "hint_field_password": "←/→ curseur · L/R sélection · Y tout · − afficher/masquer · ZL effacer · A touches · + OK · B annuler",
+    "hint_password": "↑ champ · A saisir · X effacer · Y majuscule · − afficher/masquer · ZL effacer · + OK · B annuler",
+    "layout_compact": "Clavier compact",
+    "layout_full": "Clavier plein écran",
     "letters": "ABC",
     "opened": "Clavier à l'écran. Croix directionnelle pour choisir une touche, A pour saisir, X pour effacer, Plus pour confirmer, B pour annuler.",
+    "password_hidden": "Mot de passe masqué",
+    "password_shown": "Mot de passe visible",
     "shift": "Majuscule",
     "space": "Espace",
+    "style_flat": "Clavier plat",
+    "style_glass": "Clavier verre",
     "symbols": "?12#"
   },
   "quicksettings": {
@@ -810,6 +826,7 @@
     "reboot": "Redémarrer",
     "power_off": "Éteindre",
     "hint_adjust": "Ajuster",
-    "hint_shortcut": "Paramètres rapides"
+    "hint_shortcut": "Paramètres rapides",
+    "music_idle": "Aucune lecture"
   }
 }

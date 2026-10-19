@@ -313,7 +313,8 @@
       "download_start": "Buscando en SteamGridDB...",
       "cancelling": "Cancelando...",
       "scan_cancelled": "Búsqueda de arte cancelada.",
-      "api_key_guide": "Ingrese su clave de API"
+      "api_key_guide": "Ingrese su clave de API",
+      "search_failed": "La búsqueda falló. Si HTTPS sigue fallando, revisa el reloj de la consola en Ajustes > Sistema."
     },
     "loading_tab": "Cargando esta sección en segundo plano."
   },
@@ -523,6 +524,8 @@
     "options": {
       "action_hints": "Indicaciones de acción",
       "action_hints_desc": "Elija cómo se muestran los controles contextuales en la esquina inferior derecha.",
+      "sort_large_tiles": "Ordenar también los mosaicos grandes",
+      "sort_large_tiles_desc": "A-Z y Recientes también mueven las aplicaciones que usan un mosaico más grande.",
       "hint_panel": "Panel",
       "hint_capsules": "Cápsulas",
       "auto_theme": "Tema automático",
@@ -555,7 +558,9 @@
     "navigate": "Navegar",
     "open": "Abrir",
     "resume": "Reanudar",
-    "select": "Seleccionar"
+    "select": "Seleccionar",
+    "modes": "Modos",
+    "skip": "Saltar"
   },
   "accessibility": {
     "speech": {
@@ -620,7 +625,8 @@
       "slider_actions": "Izquierda o derecha para ajustar. B vuelve a las pestañas.",
       "selector_actions": "A o derecha abre la lista. B vuelve a las pestañas.",
       "action_actions": "A ejecuta la acción. B vuelve a las pestañas.",
-      "action_secondary_actions": "Izquierda y derecha eligen Seleccionar o borrar. A para activar. B para volver a las pestañas."
+      "action_secondary_actions": "Izquierda y derecha eligen Seleccionar o borrar. A para activar. B para volver a las pestañas.",
+      "companion_actions": "A para activar. Derecha para la lista. B para cerrar."
     },
     "value": {
       "label": "Valor",
@@ -703,12 +709,22 @@
   },
   "text_entry": {
     "erase": "Borrar",
+    "field_focus": "Campo de texto. Izquierda y derecha mueven el cursor. L y R seleccionan. Y selecciona todo. A vuelve a las teclas.",
     "full": "Longitud máxima alcanzada",
-    "hint": "A: escribir   X: borrar   Y: mayúsculas   L/R: símbolos   Más: confirmar   B: cancelar",
+    "hint": "↑ campo · A escribir · X borrar · Y mayúsculas · L/R símbolos · − tamaño · ZR estilo · + OK · B cancelar",
+    "hint_field": "←/→ cursor · L/R selección · Y todo · ZL borrar · A teclas · + OK · B cancelar",
+    "hint_field_password": "←/→ cursor · L/R selección · Y todo · − mostrar/ocultar · ZL borrar · A teclas · + OK · B cancelar",
+    "hint_password": "↑ campo · A escribir · X borrar · Y mayúsculas · − mostrar/ocultar · ZL borrar · + OK · B cancelar",
+    "layout_compact": "Teclado compacto",
+    "layout_full": "Teclado completo",
     "letters": "ABC",
     "opened": "Teclado en pantalla. Cruz direccional para elegir una tecla, A para escribir, X para borrar, Más para confirmar, B para cancelar.",
+    "password_hidden": "Contraseña oculta",
+    "password_shown": "Contraseña visible",
     "shift": "Mayúsculas",
     "space": "Espacio",
+    "style_flat": "Teclado plano",
+    "style_glass": "Teclado de cristal",
     "symbols": "?12#",
     "backspace": "←",
     "caps": "MAYÚS"
@@ -873,6 +889,7 @@
     "right": "Derecha"
   },
   "page": {
+    "minus_hint": "Vista · mantener para eliminar",
     "delete": "Eliminar página",
     "delete_message": "Esta página está vacía. ¿Qué desea eliminar?",
     "delete_this": "Eliminar esta página",
