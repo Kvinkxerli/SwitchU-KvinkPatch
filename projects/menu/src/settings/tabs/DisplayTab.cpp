@@ -108,16 +108,21 @@ SettingsScreen::Tab settings::tabs::DisplayTab::build(SettingsScreen& screen) {
     {
         SettingItem it; it.label = i18n.tr("settings.display.tv_screen_size", "TV Screen Size"); it.type = ItemType::Slider;
         it.description = i18n.tr("settings.display.tv_screen_size_desc", "Adjust overscan so the full image is visible.");
-        // The slider spans 60%..100%; anything below is never useful for a TV.
-        u32 underscan = 100;
+        // The slider spans 80%..100% in 1% steps: 21 positions, 20 steps.
+        constexpr u32 kMinUnderscan = 80;
+        constexpr u32 kMaxUnderscan = 100;
+        constexpr u32 kUnderscanRange = kMaxUnderscan - kMinUnderscan;
+        u32 underscan = kMaxUnderscan;
         SetSysTvSettings tv{};
-        if (R_SUCCEEDED(setsysGetTvSettings(&tv)) && tv.underscan >= 60 && tv.underscan <= 100)
-            underscan = tv.underscan;
-        it.floatVal = static_cast<float>(underscan - 60) / 40.f;
+        if (R_SUCCEEDED(setsysGetTvSettings(&tv)))
+            underscan = std::clamp(tv.underscan, kMinUnderscan, kMaxUnderscan);
+        it.floatVal = static_cast<float>(underscan - kMinUnderscan) / static_cast<float>(kUnderscanRange);
         it.anim01 = std::clamp(it.floatVal, 0.f, 1.f);
-        it.sliderSteps = 40;
-        it.onChange = [](SettingItem& self) {
-            const u32 percent = 60u + std::clamp(static_cast<u32>(self.floatVal * 40.f + 0.5f), 0u, 40u);
+        it.sliderSteps = static_cast<int>(kUnderscanRange);
+        it.onChange = [=](SettingItem& self) {
+            const u32 percent = kMinUnderscan
+                + std::clamp(static_cast<u32>(self.floatVal * static_cast<float>(kUnderscanRange) + 0.5f),
+                             0u, kUnderscanRange);
             SetSysTvSettings tv{};
             if (R_SUCCEEDED(setsysGetTvSettings(&tv))) {
                 tv.underscan = percent;
