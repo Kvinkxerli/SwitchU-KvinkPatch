@@ -4,11 +4,104 @@
 #include <nxui/core/I18n.hpp>
 #include <switch.h>
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
 namespace {
+
+std::string toLowerCopy(std::string s) {
+    for (char& c : s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+bool containsInsensitive(const std::string& haystack, const std::string& needle) {
+    if (needle.empty())
+        return true;
+    return toLowerCopy(haystack).find(toLowerCopy(needle)) != std::string::npos;
+}
+
+std::vector<std::string> loadAllTimezoneNames() {
+    std::vector<std::string> out;
+    s32 total = 0;
+    if (R_FAILED(timeGetTotalLocationNameCount(&total)) || total <= 0)
+        return out;
+
+    out.reserve(static_cast<size_t>(total));
+    constexpr s32 kChunk = 64;
+    TimeLocationName buf[kChunk];
+    for (s32 index = 0; index < total; ) {
+        s32 got = 0;
+        if (R_FAILED(timeLoadLocationNameList(index, buf, kChunk, &got)) || got <= 0)
+            break;
+        for (s32 i = 0; i < got; ++i) {
+            if (buf[i].name[0] != '\0')
+                out.emplace_back(buf[i].name);
+        }
+        index += got;
+    }
+    return out;
+}
+
+std::string nintendoSyncLabel() {
+    return nxui::I18n::instance().tr(
+        "settings.system.internet_time",
+        "Synchronize Clock via Nintendo Servers");
+}
+
+std::string publicSyncLabel() {
+    return nxui::I18n::instance().tr(
+        "settings.system.web_time",
+        "Synchronize Clock via Public Servers");
+}
+
+std::string timezoneLabel() {
+    return nxui::I18n::instance().tr("settings.system.timezone", "Timezone");
+}
+
+} // namespace
+
+namespace settings::tabs {
+
+void SystemTab::setToggleByLabel(SettingsScreen& screen, const std::string& label, bool enabled) {
+    for (auto& tab : screen.m_tabs) {
+        for (auto& item : tab.items) {
+            if (item.type == SettingsScreen::ItemType::Toggle && item.label == label) {
+                item.boolVal = enabled;
+                item.anim01 = enabled ? 1.f : 0.f;
+            }
+        }
+    }
+}
+
+void SystemTab::disableAllClockSync(SettingsScreen& screen) {
+    bool automatic = false;
+    if (R_SUCCEEDED(setsysIsUserSystemClockAutomaticCorrectionEnabled(&automatic))
+        && automatic) {
+        const Result rc = switchu::menu::smi_cmd::setInternetTimeSync(false);
+        DebugLog::log("[settings-time] disable nintendo for manual rc=0x%X", rc);
+    }
+    setToggleByLabel(screen, nintendoSyncLabel(), false);
+
+    if (screen.m_webClockSyncEnabled) {
+        screen.m_webClockSyncEnabled = false;
+        setToggleByLabel(screen, publicSyncLabel(), false);
+        if (screen.m_webClockSyncCb)
+            screen.m_webClockSyncCb(false);
+    }
+}
+
+bool SystemTab::anyClockSyncEnabled(const SettingsScreen& screen) {
+    if (screen.m_webClockSyncEnabled)
+        return true;
+    bool automatic = false;
+    if (R_SUCCEEDED(setsysIsUserSystemClockAutomaticCorrectionEnabled(&automatic)))
+        return automatic;
+    return false;
+}
 
 bool currentDateTimeValue(TabbedOverlayScreen::DateTimeEditorValue& value) {
     u64 timestamp = 0;
@@ -52,7 +145,107 @@ bool setManualDateTime(
     return false;
 }
 
-} // namespace
+void SystemTab::openManualDateTimeEditor(SettingsScreen& screen) {
+    auto& i18n = nxui::I18n::instance();
+    TabbedOverlayScreen::DateTimeEditorValue initial;
+    if (!currentDateTimeValue(initial)) {
+        screen.requestToast(i18n.tr(
+            "settings.system.time_change_failed",
+            "The date and time setting could not be changed."));
+        return;
+    }
+    screen.requestDateTimeEditor(
+        initial, [&screen](const auto& value) {
+            return setManualDateTime(screen, value);
+        });
+}
+
+void SystemTab::refreshTimezoneRowDescription(SettingsScreen& screen, const std::string& zoneName) {
+    if (screen.m_tabIndex < 0 || screen.m_tabIndex >= (int)screen.m_tabs.size())
+        return;
+    auto& items = screen.m_tabs[screen.m_tabIndex].items;
+    for (auto& item : items) {
+        if (item.label != timezoneLabel())
+            continue;
+        item.description = zoneName.empty()
+            ? nxui::I18n::instance().tr("common.na", "N/A")
+            : zoneName;
+        break;
+    }
+}
+
+void SystemTab::beginTimezoneChange(SettingsScreen& screen, const std::string& filter) {
+    auto& i18n = nxui::I18n::instance();
+    TimeLocationName current{};
+    std::string currentName;
+    if (R_SUCCEEDED(timeGetDeviceLocationName(&current)))
+        currentName = current.name;
+
+    std::vector<std::string> zones;
+    {
+        auto all = loadAllTimezoneNames();
+        zones.reserve(all.size());
+        for (const auto& zone : all) {
+            if (containsInsensitive(zone, filter))
+                zones.push_back(zone);
+        }
+    }
+    if (zones.empty()) {
+        screen.requestToast(i18n.tr(
+            "settings.system.timezone_none",
+            "No matching timezones."));
+        return;
+    }
+
+    int selected = 0;
+    for (int i = 0; i < (int)zones.size(); ++i) {
+        if (zones[i] == currentName) {
+            selected = i;
+            break;
+        }
+    }
+
+    screen.requestTimezonePicker(
+        zones,
+        selected,
+        [&screen](const std::string& chosen) {
+            auto& i18nInner = nxui::I18n::instance();
+            TimeLocationName name{};
+            std::snprintf(name.name, sizeof(name.name), "%s", chosen.c_str());
+            const Result rc = timeSetDeviceLocationName(&name);
+            DebugLog::log("[settings-time] set timezone '%s' rc=0x%X",
+                          chosen.c_str(), rc);
+            if (R_FAILED(rc)) {
+                screen.requestToast(i18nInner.tr(
+                    "settings.system.timezone_failed",
+                    "Could not change timezone."));
+                return;
+            }
+            SystemTab::refreshTimezoneRowDescription(screen, chosen);
+            screen.requestToast(i18nInner.tr(
+                "settings.system.timezone_saved",
+                "Timezone updated."));
+            if (screen.m_webClockSyncEnabled)
+                screen.startWebClockSync(false);
+        },
+        [&screen]() {
+            auto& i18nInner = nxui::I18n::instance();
+            screen.requestTextEntry(
+                i18nInner.tr("settings.system.timezone_filter_title", "Filter timezones"),
+                i18nInner.tr(
+                    "settings.system.timezone_filter_guide",
+                    "Type to filter (e.g. New_York). Leave empty for all."),
+                std::string(),
+                36,
+                [&screen](const std::string& nextFilter) {
+                    SystemTab::beginTimezoneChange(screen, nextFilter);
+                });
+        });
+}
+
+
+} // namespace settings::tabs
+
 
 SettingsScreen::Tab settings::tabs::SystemTab::build(SettingsScreen& screen) {
     using Tab = SettingsScreen::Tab;
@@ -121,11 +314,17 @@ SettingsScreen::Tab settings::tabs::SystemTab::build(SettingsScreen& screen) {
 
     {
         TimeLocationName tz{};
-        SettingItem it; it.label = i18n.tr("settings.system.timezone", "Timezone"); it.type = ItemType::Info;
+        SettingItem it;
+        it.label = timezoneLabel();
+        it.type = ItemType::Action;
+        it.buttonLabel = i18n.tr("settings.system.timezone_button", "Change");
         if (R_SUCCEEDED(timeGetDeviceLocationName(&tz)))
-            it.infoText = tz.name;
+            it.description = tz.name;
         else
-            it.infoText = i18n.tr("common.na", "N/A");
+            it.description = i18n.tr("common.na", "N/A");
+        it.onChange = [&screen](SettingItem&) {
+            SystemTab::beginTimezoneChange(screen);
+        };
         t.items.push_back(std::move(it));
     }
 
@@ -133,11 +332,18 @@ SettingsScreen::Tab settings::tabs::SystemTab::build(SettingsScreen& screen) {
         bool automatic = true;
         const Result stateResult =
             setsysIsUserSystemClockAutomaticCorrectionEnabled(&automatic);
+        if (screen.m_webClockSyncEnabled && R_SUCCEEDED(stateResult) && automatic) {
+            const Result rc = switchu::menu::smi_cmd::setInternetTimeSync(false);
+            DebugLog::log(
+                "[settings-time] public preferred; disable nintendo on build rc=0x%X",
+                rc);
+            automatic = false;
+        }
         SettingItem it;
-        it.label = i18n.tr("settings.system.internet_time", "Synchronize Clock via Internet");
+        it.label = nintendoSyncLabel();
         it.description = i18n.tr(
             "settings.system.internet_time_desc",
-            "Automatically correct the console clock using network time.");
+            "Set clock via Nintendo (fails with DNS blocking)");
         it.type = ItemType::Toggle;
         it.boolVal = R_SUCCEEDED(stateResult) ? automatic : false;
         it.anim01 = it.boolVal ? 1.f : 0.f;
@@ -158,7 +364,54 @@ SettingsScreen::Tab settings::tabs::SystemTab::build(SettingsScreen& screen) {
                 screen.requestToast(nxui::I18n::instance().tr(
                     "settings.system.time_change_failed",
                     "The date and time setting could not be changed."));
+                return;
             }
+            if (self.boolVal && screen.m_webClockSyncEnabled) {
+                screen.m_webClockSyncEnabled = false;
+                SystemTab::setToggleByLabel(screen, publicSyncLabel(), false);
+                if (screen.m_webClockSyncCb)
+                    screen.m_webClockSyncCb(false);
+            }
+        };
+        t.items.push_back(std::move(it));
+    }
+
+    {
+        SettingItem it;
+        it.label = publicSyncLabel();
+        it.description = i18n.tr(
+            "settings.system.web_time_desc",
+            "Set clock via public HTTPS (works with DNS Blocking)");
+        it.type = ItemType::Toggle;
+        it.boolVal = screen.m_webClockSyncEnabled;
+        it.anim01 = it.boolVal ? 1.f : 0.f;
+        it.onChange = [&screen](SettingItem& self) {
+            screen.m_webClockSyncEnabled = self.boolVal;
+            if (screen.m_webClockSyncCb)
+                screen.m_webClockSyncCb(self.boolVal);
+
+            if (!self.boolVal)
+                return;
+
+            bool automatic = false;
+            if (R_SUCCEEDED(setsysIsUserSystemClockAutomaticCorrectionEnabled(&automatic))
+                && automatic) {
+                const Result rc = switchu::menu::smi_cmd::setInternetTimeSync(false);
+                DebugLog::log(
+                    "[settings-time] public sync disabled nintendo rc=0x%X", rc);
+                if (R_FAILED(rc)) {
+                    self.boolVal = false;
+                    screen.m_webClockSyncEnabled = false;
+                    if (screen.m_webClockSyncCb)
+                        screen.m_webClockSyncCb(false);
+                    screen.requestToast(nxui::I18n::instance().tr(
+                        "settings.system.time_change_failed",
+                        "The date and time setting could not be changed."));
+                    return;
+                }
+                SystemTab::setToggleByLabel(screen, nintendoSyncLabel(), false);
+            }
+            screen.startWebClockSync(false);
         };
         t.items.push_back(std::move(it));
     }
@@ -168,29 +421,28 @@ SettingsScreen::Tab settings::tabs::SystemTab::build(SettingsScreen& screen) {
         it.label = i18n.tr("settings.system.manual_time", "Set Date and Time");
         it.description = i18n.tr(
             "settings.system.manual_time_desc",
-            "Available when Internet clock synchronization is disabled.");
+            "Set the clock yourself. Disables sync if it is on.");
         it.type = ItemType::Action;
         it.buttonLabel = i18n.tr("settings.system.manual_time_button", "Change");
         it.onChange = [&screen](SettingItem&) {
-            bool automatic = true;
-            const Result stateRc =
-                setsysIsUserSystemClockAutomaticCorrectionEnabled(&automatic);
-            if (R_FAILED(stateRc) || automatic) {
-                screen.requestToast(nxui::I18n::instance().tr(
-                    "settings.system.disable_internet_time_first",
-                    "Disable Internet clock synchronization first."));
+            auto& i18nInner = nxui::I18n::instance();
+            if (!SystemTab::anyClockSyncEnabled(screen)) {
+                SystemTab::openManualDateTimeEditor(screen);
                 return;
             }
-            TabbedOverlayScreen::DateTimeEditorValue initial;
-            if (!currentDateTimeValue(initial)) {
-                screen.requestToast(nxui::I18n::instance().tr(
-                    "settings.system.time_change_failed",
-                    "The date and time setting could not be changed."));
-                return;
-            }
-            screen.requestDateTimeEditor(
-                initial, [&screen](const auto& value) {
-                    return setManualDateTime(screen, value);
+            screen.requestDialog(
+                i18nInner.tr(
+                    "settings.system.manual_time_disable_sync_title",
+                    "Disable clock sync?"),
+                i18nInner.tr(
+                    "settings.system.manual_time_disable_sync_msg",
+                    "This will disable Sync. Continue?"),
+                {
+                    { i18nInner.tr("button.ok", "OK"), [&screen]() {
+                        SystemTab::disableAllClockSync(screen);
+                        SystemTab::openManualDateTimeEditor(screen);
+                    } },
+                    { i18nInner.tr("button.cancel", "Cancel"), []() {} }
                 });
         };
         t.items.push_back(std::move(it));

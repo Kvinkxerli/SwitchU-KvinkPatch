@@ -5345,6 +5345,27 @@ void WiiUMenuApp::onUpdateAwake(float dt) {
         }
     }
 
+    // Public HTTPS clock sync once per boot (failure toast only; retry until online).
+    if (m_config.webClockSyncEnabled && !m_webClockBootSyncStarted) {
+        if (leaveSplashActive() || m_deferredInitialAssetFrames > 0) {
+            m_webClockBootSyncDelayFrames =
+                std::max(m_webClockBootSyncDelayFrames, 90);
+        } else if (m_webClockBootSyncDelayFrames > 0) {
+            --m_webClockBootSyncDelayFrames;
+        } else if (!themeshop::http::isInternetReadyForHttp()) {
+            m_webClockBootSyncDelayFrames = 45;
+        } else {
+            m_webClockBootSyncStarted = true;
+            createSettings();
+            if (m_settings) {
+                m_settings->setWebClockSyncState(true);
+                DebugLog::log("[boot] starting public web clock sync");
+                m_settings->startWebClockSync(true);
+            }
+        }
+    }
+    if (m_settings)
+        m_settings->pollClockSync();
 
     // Finish music start only after leave-splash + deferred assets. Doing
     // Mix_PlayMusic/seek in the same burst as sidebar/icon GPU uploads was

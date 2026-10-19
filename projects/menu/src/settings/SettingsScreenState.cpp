@@ -2,8 +2,22 @@
 #include "tabs/TabBuilders.hpp"
 #include "core/DebugLog.hpp"
 #include "bluetooth/BluetoothManager.hpp"
+#include "smi_commands.hpp"
+#include "themeshop/ThemeHttp.hpp"
 #include <nxui/core/I18n.hpp>
+#include <switch.h>
 #include <chrono>
+#include <cstdio>
+
+namespace {
+
+bool isRetriableClockSyncError(const std::string& error) {
+    return error.find("nifmGetInternetConnectionStatus") != std::string::npos
+        || error.find("Internet connection is not ready") != std::string::npos
+        || error.find("nifmInitialize") != std::string::npos;
+}
+
+} // namespace
 
 void SettingsScreen::buildTabs() {
     auto& i18n = nxui::I18n::instance();
@@ -159,8 +173,172 @@ void SettingsScreen::prefetchOneTab() {
 
 void SettingsScreen::onContentUpdate(float dt) {
     pollTabLoaders();
+    pollClockSync();
     if (isActive())
         prefetchOneTab();
     TabbedOverlayScreen::onContentUpdate(dt);
     pollTabLoaders();
+    pollClockSync();
+}
+
+void SettingsScreen::emitClockSyncToast(const std::string& msg, float holdSeconds) {
+    if (msg.empty())
+        return;
+    if (isFullyVisible()) {
+        requestToast(msg, holdSeconds);
+        return;
+    }
+    if (m_externalToastCb) {
+        m_externalToastCb(msg, holdSeconds);
+        return;
+    }
+    requestToast(msg, holdSeconds);
+}
+
+void SettingsScreen::startWebClockSync(bool toastFailureOnly) {
+    auto& i18n = nxui::I18n::instance();
+    if (m_clockSyncFuture.valid()) {
+        if (!toastFailureOnly) {
+            emitClockSyncToast(i18n.tr(
+                "settings.system.web_time_busy",
+                "Clock sync is already running."));
+        }
+        return;
+    }
+
+    m_clockSyncToastFailureOnly = toastFailureOnly;
+    if (!toastFailureOnly) {
+        emitClockSyncToast(i18n.tr(
+            "settings.system.web_time_working",
+            "Syncing clock from the web..."), 1.8f);
+    }
+
+    m_clockSyncFuture = std::async(std::launch::async, []() -> ClockSyncFetch {
+        ClockSyncFetch out;
+        try {
+            out.posixUtc = themeshop::http::fetchUtcUnixTime();
+            out.ok = true;
+        } catch (const std::exception& ex) {
+            out.ok = false;
+            out.error = ex.what();
+        } catch (...) {
+            out.ok = false;
+            out.error = "Unknown clock sync error";
+        }
+        return out;
+    });
+}
+
+void SettingsScreen::pollClockSync() {
+    if (!m_clockSyncFuture.valid())
+        return;
+    if (m_clockSyncFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return;
+
+    const ClockSyncFetch fetched = m_clockSyncFuture.get();
+    const bool failureOnly = m_clockSyncToastFailureOnly;
+    m_clockSyncToastFailureOnly = false;
+    auto& i18n = nxui::I18n::instance();
+    if (!fetched.ok) {
+        DebugLog::log("[settings-time] web clock sync fetch failed: %s",
+                      fetched.error.c_str());
+        if (failureOnly && m_clockSyncBootRetryCb
+            && isRetriableClockSyncError(fetched.error)) {
+            m_clockSyncBootRetryCb(fetched.error);
+            return;
+        }
+        const std::string prefix = i18n.tr(
+            "settings.system.web_time_failed",
+            "Could not sync clock from the web.");
+        if (fetched.error.empty())
+            emitClockSyncToast(prefix);
+        else
+            emitClockSyncToast(prefix + " " + fetched.error);
+        return;
+    }
+
+    // Nintendo auto-sync needs Nintendo servers; turn it off so DNS-blocked
+    // setups keep the web-synced time.
+    bool automatic = false;
+    if (R_SUCCEEDED(setsysIsUserSystemClockAutomaticCorrectionEnabled(&automatic))
+        && automatic) {
+        const Result disableRc = switchu::menu::smi_cmd::setInternetTimeSync(false);
+        DebugLog::log("[settings-time] web sync disabled nintendo auto rc=0x%X",
+                      disableRc);
+    }
+
+    const std::string nintendoLabel = i18n.tr(
+        "settings.system.internet_time",
+        "Synchronize Clock via Nintendo Servers");
+    const std::string publicLabel = i18n.tr(
+        "settings.system.web_time",
+        "Synchronize Clock via Public Servers");
+    for (auto& tab : m_tabs) {
+        for (auto& item : tab.items) {
+            if (item.type != ItemType::Toggle)
+                continue;
+            if (item.label == nintendoLabel) {
+                item.boolVal = false;
+                item.anim01 = 0.f;
+            } else if (item.label == publicLabel) {
+                item.boolVal = m_webClockSyncEnabled;
+                item.anim01 = m_webClockSyncEnabled ? 1.f : 0.f;
+            }
+        }
+    }
+
+    TimeCalendarTime calendar{};
+    TimeCalendarAdditionalInfo additional{};
+    const Result calRc = timeToCalendarTimeWithMyRule(
+        fetched.posixUtc, &calendar, &additional);
+    if (R_FAILED(calRc)) {
+        DebugLog::log("[settings-time] web sync calendar convert rc=0x%X", calRc);
+        emitClockSyncToast(i18n.tr(
+            "settings.system.time_change_failed",
+            "The date and time setting could not be changed."));
+        return;
+    }
+
+    TabbedOverlayScreen::DateTimeEditorValue value;
+    value.year = calendar.year;
+    value.month = calendar.month;
+    value.day = calendar.day;
+    value.hour = calendar.hour;
+    value.minute = calendar.minute;
+
+    switchu::smi::ManualDateTimeArgs daemonArgs{};
+    daemonArgs.year = static_cast<uint32_t>(value.year);
+    daemonArgs.month = static_cast<uint32_t>(value.month);
+    daemonArgs.day = static_cast<uint32_t>(value.day);
+    daemonArgs.hour = static_cast<uint32_t>(value.hour);
+    daemonArgs.minute = static_cast<uint32_t>(value.minute);
+    const Result daemonRc = switchu::menu::smi_cmd::setManualDateTime(daemonArgs);
+    DebugLog::log(
+        "[settings-time] web sync apply %04u-%02u-%02u %02u:%02u rc=0x%X posix=%llu",
+        daemonArgs.year, daemonArgs.month, daemonArgs.day,
+        daemonArgs.hour, daemonArgs.minute, daemonRc,
+        static_cast<unsigned long long>(fetched.posixUtc));
+
+    if (R_SUCCEEDED(daemonRc)) {
+        if (!failureOnly) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf),
+                          "%s (%04u-%02u-%02u %02u:%02u)",
+                          i18n.tr("settings.system.web_time_saved",
+                                  "Clock synced from the web.").c_str(),
+                          daemonArgs.year, daemonArgs.month, daemonArgs.day,
+                          daemonArgs.hour, daemonArgs.minute);
+            emitClockSyncToast(buf, 3.2f);
+        } else {
+            DebugLog::log("[settings-time] boot web sync ok (quiet)");
+        }
+    } else {
+        char buf[128];
+        std::snprintf(
+            buf, sizeof(buf), "%s (0x%X)",
+            i18n.tr("settings.system.time_change_failed",
+                    "The date and time setting could not be changed.").c_str(),
+            daemonRc);
+        emitClockSyncToast(buf);
+    }
 }

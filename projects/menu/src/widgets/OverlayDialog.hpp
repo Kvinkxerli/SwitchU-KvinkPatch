@@ -55,6 +55,13 @@ public:
     void showDateTimeEditor(const DateTimeValue& initial,
                             DateTimeSaveCallback onSave,
                             CancelCallback onCancel = {});
+    using TimezoneSelectCallback = std::function<void(const std::string& zone)>;
+    using TimezoneSearchCallback = std::function<void()>;
+    void showTimezonePicker(const std::vector<std::string>& zones,
+                            int selectedIndex,
+                            TimezoneSelectCallback onSelect,
+                            TimezoneSearchCallback onSearch,
+                            CancelCallback onCancel = {});
 
     void hide();
 
@@ -94,19 +101,24 @@ private:
     void buildWidgetTree();
     void buildUserSelect();
     void buildDateTimeEditor();
+    void buildTimezonePicker();
     void animateButtonFocus(float duration, nxui::EasingFunc easing);
     void setupActions();
     void setupUserActions();
     void setupDateTimeActions();
+    void setupTimezoneActions();
     void activateSelected();
     void activateSelectedUser();
     void saveDateTime();
     void moveDateTimeField(int direction);
     void adjustDateTimeField(int direction);
+    void moveTimezoneHover(int direction);
+    void activateTimezoneSelection();
     void cancel();
     void syncCursor();
     void syncUserCursor();
     void syncDateTimeCursor();
+    void syncTimezoneCursor();
     void announceCurrentSelection(bool forceRepeat = false, bool forceContext = false);
     void currentAccessibilityParts(std::string& context,
                                    std::string& position,
@@ -118,7 +130,12 @@ private:
     nxui::Rect userAvatarRect(int index) const;
     void renderUserContent(nxui::Renderer& ren, float alpha);
     void renderDateTimeContent(nxui::Renderer& ren, float alpha);
+    void renderTimezoneContent(nxui::Renderer& ren, float alpha);
     nxui::Rect dateTimeFieldRect(int index) const;
+    nxui::Rect timezoneSearchRect() const;
+    nxui::Rect timezoneListRect() const;
+    nxui::Rect timezoneRowRect(int visualRow) const;
+    void ensureTimezoneHoverVisible();
 
     nxui::Rect panelRect() const;
 
@@ -126,6 +143,7 @@ private:
         Buttons,
         UserSelect,
         DateTime,
+        Timezone,
     };
 
     struct UserEntry {
@@ -169,6 +187,13 @@ private:
     DateTimeSaveCallback m_onDateTimeSave;
     DateTimeValue m_dateTime{};
     int m_dateTimeField = 0;
+    TimezoneSelectCallback m_onTimezoneSelect;
+    TimezoneSearchCallback m_onTimezoneSearch;
+    std::vector<std::string> m_timezoneOptions;
+    int m_timezoneHover = 0;
+    int m_timezoneScroll = 0;
+    bool m_timezoneSearchFocused = false;
+    static constexpr int kTimezoneVisibleRows = 7;
     VoidCb         m_navSfxCb;
     VoidCb         m_activateSfxCb;
     VoidCb         m_closeSfxCb;
@@ -180,6 +205,8 @@ private:
 
     int  m_touchHitButton  = -1;
     int  m_touchHitUser    = -1;
+    int  m_touchHitTimezone = -1;
+    bool m_touchOnTimezoneSearch = false;
     bool m_touchOnSelected = false;
     bool m_ignoreInitialTouchRelease = false;
 
@@ -197,4 +224,6 @@ private:
     static constexpr float kUserAvatarSize = 96.f;
     static constexpr float kUserAvatarGap = 32.f;
     static constexpr float kUserTitleGap = 30.f;
+    static constexpr float kTimezoneSearchW = 108.f;
+    static constexpr float kTimezoneRowH = 44.f;
 };

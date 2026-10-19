@@ -21,7 +21,7 @@ SettingsScreen::Tab settings::tabs::SteamGridDbTab::build(SettingsScreen& screen
     enabled.type = ItemType::Toggle;
     enabled.label = i18n.tr("settings.steamgriddb.enabled", "Display SteamGridDB artwork");
     enabled.description = i18n.tr("settings.steamgriddb.enabled_desc",
-        "Master switch. Nested options below choose where artwork appears.");
+        "Choose where artwork appears below.");
     enabled.boolVal = screen.m_steamGridDbEnabled;
     enabled.anim01 = enabled.boolVal ? 1.f : 0.f;
     enabled.onChange = [&screen](SettingItem& item) {
@@ -85,7 +85,7 @@ SettingsScreen::Tab settings::tabs::SteamGridDbTab::build(SettingsScreen& screen
     scan.label = i18n.tr("settings.steamgriddb.scan", "Search artwork for missing assets");
     scan.buttonLabel = i18n.tr("button.search", "Search");
     scan.description = i18n.tr("settings.steamgriddb.scan_desc",
-        "Downloads a hero and logo only for applications that do not already have artwork. Cancel or press B to stop.");
+        "Retrieve hero and logo for titles that are missing art.");
     scan.onChange = [&screen](SettingItem&) {
         if (screen.m_steamGridDbRunning) {
             screen.requestToast(nxui::I18n::instance().tr(

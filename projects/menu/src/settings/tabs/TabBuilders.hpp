@@ -1,12 +1,23 @@
 #pragma once
 
 #include "../SettingsScreen.hpp"
+#include <string>
+#include <vector>
 
 namespace settings::tabs {
 
 class SystemTab {
 public:
     static SettingsScreen::Tab build(SettingsScreen& screen);
+
+private:
+    static void setToggleByLabel(SettingsScreen& screen, const std::string& label, bool enabled);
+    static void disableAllClockSync(SettingsScreen& screen);
+    static bool anyClockSyncEnabled(const SettingsScreen& screen);
+    static void openManualDateTimeEditor(SettingsScreen& screen);
+    static void refreshTimezoneRowDescription(SettingsScreen& screen, const std::string& zoneName);
+    static void beginTimezoneChange(SettingsScreen& screen,
+                                    const std::string& filter = std::string());
 };
 
 class AccessibilityTab {

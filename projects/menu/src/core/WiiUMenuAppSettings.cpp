@@ -239,6 +239,7 @@ void WiiUMenuApp::createSettings() {
     m_settings->setGridLayoutState(m_config.gridColumns, m_config.gridRows);
     m_settings->setUiLanguageOverride(m_config.uiLanguageOverride);
     m_settings->setClockUse12HourState(m_config.clockUse12Hour);
+    m_settings->setWebClockSyncState(m_config.webClockSyncEnabled);
     m_settings->setAccessibilityEnabledState(m_config.accessibilityEnabled);
     m_settings->setAccessibilitySpeechState(m_config.accessibilitySpeakHints,
                                             m_config.accessibilitySpeakContextEveryFocus,
@@ -308,6 +309,64 @@ void WiiUMenuApp::createSettings() {
         if (m_clock)
             m_clock->setUse12HourClock(enabled);
     });
+    m_settings->onWebClockSyncChange([this](bool enabled) {
+        if (m_config.webClockSyncEnabled == enabled)
+            return;
+        m_config.webClockSyncEnabled = enabled;
+    });
+    m_settings->onExternalToast([this](const std::string& msg, float) {
+        if (!m_dialog || msg.empty())
+            return;
+        auto& i18n = nxui::I18n::instance();
+        m_dialogReturnFocus = focusManager().current();
+        m_dialog->show(
+            i18n.tr("settings.system.web_time",
+                    "Synchronize Clock via Public Servers"),
+            msg,
+            {
+                { i18n.tr("button.ok", "OK"), []() {} }
+            });
+        focusManager().setFocus(m_dialog.get());
+    });
+    m_settings->onClockSyncBootRetry([this](const std::string& error) {
+        constexpr int kMaxBootClockSyncFailures = 12;
+        m_webClockBootSyncStarted = false;
+        ++m_webClockBootSyncFailures;
+        DebugLog::log("[boot] public web clock sync retry %d/%d: %s",
+                      m_webClockBootSyncFailures,
+                      kMaxBootClockSyncFailures,
+                      error.c_str());
+        if (m_webClockBootSyncFailures >= kMaxBootClockSyncFailures) {
+            m_webClockBootSyncStarted = true;
+            if (!m_settings)
+                return;
+            auto& i18n = nxui::I18n::instance();
+            const std::string prefix = i18n.tr(
+                "settings.system.web_time_failed",
+                "Could not sync clock from the web.");
+            const std::string msg = error.empty() ? prefix : prefix + " " + error;
+            if (m_dialog) {
+                m_dialogReturnFocus = focusManager().current();
+                m_dialog->show(
+                    i18n.tr("settings.system.web_time",
+                            "Synchronize Clock via Public Servers"),
+                    msg,
+                    {{ i18n.tr("button.ok", "OK"), []() {} }});
+                focusManager().setFocus(m_dialog.get());
+            } else {
+                m_settings->requestToast(msg, 3.5f);
+            }
+            return;
+        }
+        m_webClockBootSyncDelayFrames = 120;
+    });
+    m_settings->onTextEntryRequest(
+        [this](const std::string& title, const std::string& guide,
+               const std::string& initial, int maxLength,
+               TabbedOverlayScreen::TextEntryAcceptCb onAccept) {
+            requestTextEntry(title, guide, initial, maxLength, false,
+                             std::move(onAccept));
+        });
     m_settings->onAccessibilityEnabledChange([this](bool enabled) {
         if (m_config.accessibilityEnabled == enabled)
             return;
@@ -510,6 +569,24 @@ void WiiUMenuApp::createSettings() {
                     if (saved)
                         m_clockService.invalidate();
                     return saved;
+                });
+            focusManager().setFocus(m_dialog.get());
+        });
+    m_settings->onTimezonePickerRequest(
+        [this](const std::vector<std::string>& zones, int selectedIndex,
+               TabbedOverlayScreen::TimezoneSelectCb onSelect,
+               TabbedOverlayScreen::TimezoneSearchCb onSearch) {
+            if (!m_dialog) return;
+            m_dialogReturnFocus = m_settings.get();
+            m_dialog->showTimezonePicker(
+                zones,
+                selectedIndex,
+                [this, onSelect = std::move(onSelect)](const std::string& zone) mutable {
+                    if (onSelect) onSelect(zone);
+                    m_clockService.invalidate();
+                },
+                [this, onSearch = std::move(onSearch)]() mutable {
+                    if (onSearch) onSearch();
                 });
             focusManager().setFocus(m_dialog.get());
         });

@@ -32,6 +32,8 @@ struct AppConfig {
     std::string defaultProfileUid;
     bool  tutorialCompleted = false;
     bool  clockUse12Hour = false;
+    // Alternate to Nintendo auto clock correction: HTTPS Date sync on boot.
+    bool  webClockSyncEnabled = false;
     bool  accessibilityEnabled = true;
     bool  accessibilitySpeakHints = true;
     bool  accessibilitySpeakContextEveryFocus = false;

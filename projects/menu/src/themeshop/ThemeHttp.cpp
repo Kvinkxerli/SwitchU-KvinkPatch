@@ -4,13 +4,16 @@
 
 #include <curl/curl.h>
 #include <curlpp/Easy.hpp>
+#include <curlpp/Exception.hpp>
 #include <curlpp/Infos.hpp>
 #include <curlpp/Options.hpp>
 #include <curlpp/cURLpp.hpp>
 #include <switch.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <ctime>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -147,10 +150,30 @@ std::vector<std::uint8_t> performRequestBytes(const std::string& url,
     configureRequest(request, url, response, headers, onProgress, shouldAbort);
     try {
         request.perform();
+    } catch (const curlpp::LibcurlRuntimeError& ex) {
+        if (isAbortRequested(shouldAbort))
+            throw std::runtime_error("Cancelled");
+        const char* detail = ex.what();
+        std::string msg = "HTTPS failed";
+        if (detail && detail[0] != '\0') {
+            msg += ": ";
+            msg += detail;
+        } else {
+            msg += ": ";
+            msg += curl_easy_strerror(ex.whatCode());
+        }
+        throw std::runtime_error(msg);
+    } catch (const std::exception& ex) {
+        if (isAbortRequested(shouldAbort))
+            throw std::runtime_error("Cancelled");
+        const char* detail = ex.what();
+        if (detail && detail[0] != '\0')
+            throw std::runtime_error(detail);
+        throw std::runtime_error("HTTPS request failed");
     } catch (...) {
         if (isAbortRequested(shouldAbort))
             throw std::runtime_error("Cancelled");
-        throw;
+        throw std::runtime_error("HTTPS request failed");
     }
 
     if (isAbortRequested(shouldAbort))
@@ -191,14 +214,16 @@ std::vector<std::uint8_t> performBytes(const std::string& url,
             }
             return bytes;
         } catch (const std::exception& ex) {
-            lastError = ex.what();
+            lastError = ex.what() ? ex.what() : "";
+            if (lastError.empty())
+                lastError = "HTTPS request failed";
             if (lastError == "Cancelled" || isAbortRequested(shouldAbort))
                 throw std::runtime_error("Cancelled");
             DebugLog::log("[themeshop] request failed (%d/%d): %s -> %s",
                           attempt,
                           kRequestAttemptCount,
                           url.c_str(),
-                          ex.what());
+                          lastError.c_str());
         } catch (...) {
             if (isAbortRequested(shouldAbort))
                 throw std::runtime_error("Cancelled");
@@ -211,6 +236,130 @@ std::vector<std::uint8_t> performBytes(const std::string& url,
 
         if (attempt < kRequestAttemptCount) {
             shutdownRuntimeLocked();
+        }
+    }
+
+    throw std::runtime_error(lastError);
+}
+
+std::string extractHttpDateHeader(const std::string& headerBlock) {
+    // curl header callback delivers one header line at a time or a buffer; we
+    // accumulate full blocks and scan case-insensitively for "Date:".
+    std::string lower = headerBlock;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    constexpr const char* kKey = "date:";
+    const auto pos = lower.find(kKey);
+    if (pos == std::string::npos)
+        return {};
+    std::size_t start = pos + 5;
+    while (start < headerBlock.size()
+           && (headerBlock[start] == ' ' || headerBlock[start] == '\t'))
+        ++start;
+    std::size_t end = start;
+    while (end < headerBlock.size()
+           && headerBlock[end] != '\r' && headerBlock[end] != '\n')
+        ++end;
+    while (end > start && (headerBlock[end - 1] == ' ' || headerBlock[end - 1] == '\t'))
+        --end;
+    return headerBlock.substr(start, end - start);
+}
+
+std::uint64_t performUtcUnixTimeRequest(const std::string& url,
+                                        const themeshop::http::AbortCheck& shouldAbort) {
+    if (isAbortRequested(shouldAbort))
+        throw std::runtime_error("Cancelled");
+
+    std::string headerAccum;
+    std::ostringstream body;
+    curlpp::Easy request;
+    request.setOpt<curlpp::options::Url>(url);
+    request.setOpt<curlpp::options::NoBody>(true); // HEAD
+    request.setOpt<curlpp::options::FollowLocation>(true);
+    request.setOpt<curlpp::options::NoSignal>(true);
+    request.setOpt<curlpp::options::ConnectTimeout>(12L);
+    request.setOpt<curlpp::options::Timeout>(20L);
+    request.setOpt<curlpp::options::IpResolve>((long)CURL_IPRESOLVE_V4);
+    request.setOpt<curlpp::options::UserAgent>(std::string("SwitchU/") + SWITCHU_VERSION);
+    // Clock may be years off; cert validity checks then fail. This endpoint is
+    // only used to read the Date header for bootstrapping the console clock.
+    request.setOpt<curlpp::options::SslVerifyPeer>(false);
+    request.setOpt<curlpp::options::SslVerifyHost>(0L);
+    request.setOpt<curlpp::options::WriteStream>(&body);
+    request.setOpt<curlpp::options::HeaderFunction>(
+        [&headerAccum, &shouldAbort](char* ptr, size_t size, size_t nmemb) -> size_t {
+            if (isAbortRequested(shouldAbort))
+                return 0; // abort
+            const size_t total = size * nmemb;
+            headerAccum.append(ptr, total);
+            return total;
+        });
+
+    try {
+        request.perform();
+    } catch (...) {
+        if (isAbortRequested(shouldAbort))
+            throw std::runtime_error("Cancelled");
+        throw;
+    }
+    if (isAbortRequested(shouldAbort))
+        throw std::runtime_error("Cancelled");
+
+    const std::string dateValue = extractHttpDateHeader(headerAccum);
+    if (dateValue.empty())
+        throw std::runtime_error("No Date header from " + url);
+
+    const time_t parsed = curl_getdate(dateValue.c_str(), nullptr);
+    if (parsed < 0)
+        throw std::runtime_error("Could not parse Date header: " + dateValue);
+
+    // Sanity: reject absurd results (before 2020 / after ~2100).
+    constexpr time_t kMin = 1577836800;  // 2020-01-01 UTC
+    constexpr time_t kMax = 4102444800;  // 2100-01-01 UTC
+    if (parsed < kMin || parsed > kMax)
+        throw std::runtime_error("Date header out of range: " + dateValue);
+
+    DebugLog::log("[themeshop] clock sync Date '%s' -> %lld from %s",
+                  dateValue.c_str(),
+                  static_cast<long long>(parsed),
+                  url.c_str());
+    return static_cast<std::uint64_t>(parsed);
+}
+
+std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort) {
+    static const char* kUrls[] = {
+        "https://www.cloudflare.com/",
+        "https://www.google.com/",
+        "https://1.1.1.1/",
+    };
+
+    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
+    std::string lastError = "Clock sync request failed";
+
+    for (const char* url : kUrls) {
+        for (int attempt = 1; attempt <= kRequestAttemptCount; ++attempt) {
+            if (isAbortRequested(shouldAbort))
+                throw std::runtime_error("Cancelled");
+            try {
+                if (!initializeRuntimeLocked())
+                    throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
+                ensureInternetConnectionReady(url);
+                return performUtcUnixTimeRequest(url, shouldAbort);
+            } catch (const std::exception& ex) {
+                lastError = ex.what();
+                if (lastError == "Cancelled" || isAbortRequested(shouldAbort))
+                    throw std::runtime_error("Cancelled");
+                DebugLog::log("[themeshop] clock sync failed (%d/%d): %s -> %s",
+                              attempt, kRequestAttemptCount, url, ex.what());
+            } catch (...) {
+                if (isAbortRequested(shouldAbort))
+                    throw std::runtime_error("Cancelled");
+                lastError = "Unknown clock sync error";
+                DebugLog::log("[themeshop] clock sync failed (%d/%d): %s -> unknown error",
+                              attempt, kRequestAttemptCount, url);
+            }
+            if (attempt < kRequestAttemptCount)
+                shutdownRuntimeLocked();
         }
     }
 
@@ -236,6 +385,22 @@ bool isInitialized() {
     return runtimeInitializedLocked();
 }
 
+bool isInternetReadyForHttp() {
+    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
+    if (!initializeRuntimeLocked())
+        return false;
+
+    NifmInternetConnectionStatus status = NifmInternetConnectionStatus_ConnectingUnknown1;
+    u32 strength = 0;
+    const Result rc = nifmGetInternetConnectionStatus(nullptr, &strength, &status);
+    if (R_FAILED(rc)) {
+        DebugLog::log("[themeshop] isInternetReady nifm status rc=%s",
+                      resultToString(rc).c_str());
+        return false;
+    }
+    return status == NifmInternetConnectionStatus_Connected;
+}
+
 std::vector<std::uint8_t> getBytes(const std::string& url,
                                    const std::list<std::string>& headers,
                                    const ProgressCallback& onProgress,
@@ -248,6 +413,10 @@ std::string getText(const std::string& url,
                     const AbortCheck& shouldAbort) {
     auto bytes = performBytes(url, headers, {}, shouldAbort);
     return std::string(bytes.begin(), bytes.end());
+}
+
+std::uint64_t fetchUtcUnixTime(const AbortCheck& shouldAbort) {
+    return performUtcUnixTime(shouldAbort);
 }
 
 } // namespace themeshop::http

@@ -16,6 +16,8 @@ using AbortCheck = std::function<bool()>;
 bool initialize();
 void shutdown();
 bool isInitialized();
+/// True when NIFM reports an active internet connection (initializes HTTP runtime if needed).
+bool isInternetReadyForHttp();
 
 std::vector<std::uint8_t> getBytes(const std::string& url,
                                    const std::list<std::string>& headers = {},
@@ -25,5 +27,10 @@ std::vector<std::uint8_t> getBytes(const std::string& url,
 std::string getText(const std::string& url,
                     const std::list<std::string>& headers = {},
                     const AbortCheck& shouldAbort = {});
+
+/// Fetch current UTC unix time from public HTTPS Date headers.
+/// Uses relaxed TLS verification so a badly wrong console clock can still
+/// bootstrap (Nintendo auto-sync is blocked under common DNS filters).
+std::uint64_t fetchUtcUnixTime(const AbortCheck& shouldAbort = {});
 
 } // namespace themeshop::http

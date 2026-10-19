@@ -627,6 +627,9 @@ private:
     bool m_suppressNextNavigateSfx    = false;
     bool m_pendingNetConnect          = false;
     int  m_deferredInitialAssetFrames = 0;
+    bool m_webClockBootSyncStarted = false;
+    int  m_webClockBootSyncDelayFrames = 0;
+    int  m_webClockBootSyncFailures = 0;
     bool m_deferredStaticTextures = false;
     int  m_deferredProfileFrames = 0;
     struct DeferredProfileList {

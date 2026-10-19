@@ -69,7 +69,7 @@ void FolderOptionsScreen::buildTabs() {
     SettingItem size;
     size.label = i18n.tr("folder.size", "Folder size");
     size.description = i18n.tr(
-        "folder.size_desc", "Changes the size and number of icons shown inside this folder.");
+        "folder.size_desc", "Changes the size and number of icons.");
     size.type = ItemType::Selector;
     size.options = {
         i18n.tr("folder.size_small", "Small"),
@@ -87,7 +87,7 @@ void FolderOptionsScreen::buildTabs() {
     style.label = i18n.tr("folder.style", "Folder style");
     style.description = i18n.tr(
         "folder.style_desc",
-        "Applies to every folder, including new ones.");
+        "Change look and feel (of all folders)");
     style.type = ItemType::Selector;
     style.options = {
         i18n.tr("folder.style_classic", "Classic"),
@@ -110,7 +110,7 @@ void FolderOptionsScreen::buildTabs() {
     cover.label = i18n.tr("folder.show_cover", "Show cover");
     cover.description = i18n.tr(
         "folder.show_cover_desc",
-        "Shows the first game on every folder. Classic keeps the mosaic instead.");
+        "Show first apps icon on folders.");
     cover.type = ItemType::Toggle;
     cover.boolVal = m_folder.showCover;
     cover.anim01 = cover.boolVal ? 1.f : 0.f;
@@ -133,7 +133,7 @@ void FolderOptionsScreen::buildTabs() {
         ? i18n.tr("folder.custom_icon_set_desc",
                   "SteamGridDB icon is active for this folder. Requires Show cover.")
         : i18n.tr("folder.custom_icon_desc",
-                  "Search SteamGridDB and use an icon as this folder's cover.");
+                  "Search SteamGridDB and use an icon.");
     customIcon.type = ItemType::Action;
     customIcon.onChange = [this](SettingItem&) {
         if (m_customIconSelectCb) m_customIconSelectCb();

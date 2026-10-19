@@ -148,15 +148,15 @@ void GameOptionsScreen::buildTabs() {
     };
     addArtworkActions("game.steamgriddb.hero", "Hero",
                       "game.steamgriddb.hero_desc",
-                      "Open the hero gallery and choose an image.",
+                      "Choose a hero image.",
                       ArtworkKind::Hero, m_game.hasHeroArt);
     addArtworkActions("game.steamgriddb.logo", "Logo",
                       "game.steamgriddb.logo_desc",
-                      "Open the logo gallery and choose an image.",
+                      "Choose a logo.",
                       ArtworkKind::Logo, m_game.hasLogoArt);
     addArtworkActions("game.steamgriddb.icon", "Replacement icon",
                       "game.steamgriddb.icon_desc",
-                      "Open the icon gallery and choose an override.",
+                      "Choose an icon.",
                       ArtworkKind::Icon, m_game.hasIconArt);
     m_tabs.push_back(std::move(artwork));
 

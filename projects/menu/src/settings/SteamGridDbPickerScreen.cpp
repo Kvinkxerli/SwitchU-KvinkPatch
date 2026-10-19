@@ -2,20 +2,76 @@
 
 #include "themeshop/ThemeHttp.hpp"
 
+#include <nxui/core/I18n.hpp>
 #include <nxui/core/Input.hpp>
 #include <nxui/core/Renderer.hpp>
 #include <nxui/third_party/stb/stb_image.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace {
 constexpr int kColumns = 4;
 constexpr int kRows = 3;
 constexpr int kPerPage = kColumns * kRows;
 constexpr int kGameListVisible = 8;
+constexpr float kContentTop = 236.f;
+
+std::vector<std::string> wrapLines(nxui::Font* font, const std::string& text,
+                                   float maxWidth, float scale) {
+    std::vector<std::string> lines;
+    if (!font || text.empty() || maxWidth <= 1.f) {
+        if (!text.empty()) lines.push_back(text);
+        return lines;
+    }
+
+    std::string word;
+    std::string line;
+    auto flushWord = [&]() {
+        if (word.empty()) return;
+        const std::string candidate = line.empty() ? word : (line + " " + word);
+        if (font->measure(candidate).x * scale <= maxWidth || line.empty()) {
+            line = candidate;
+        } else {
+            lines.push_back(line);
+            line = word;
+        }
+        word.clear();
+    };
+
+    for (char ch : text) {
+        if (ch == '\n') {
+            flushWord();
+            lines.push_back(line);
+            line.clear();
+            continue;
+        }
+        if (ch == ' ' || ch == '\t') {
+            flushWord();
+            continue;
+        }
+        word.push_back(ch);
+    }
+    flushWord();
+    if (!line.empty() || lines.empty())
+        lines.push_back(line);
+    return lines;
+}
+
+bool looksLikeTransportError(const std::string& message) {
+    std::string lower = message;
+    for (char& c : lower)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return lower.find("https failed") != std::string::npos
+        || lower.find("couldn't reach steamgriddb") != std::string::npos
+        || lower.find("console clock") != std::string::npos
+        || lower.find("ssl") != std::string::npos
+        || lower.find("certificate") != std::string::npos;
+}
 }
 
 SteamGridDbPickerScreen::SteamGridDbPickerScreen(nxui::GpuDevice& gpu,
@@ -88,7 +144,7 @@ void SteamGridDbPickerScreen::showGameList(const std::vector<GameMatch>& matches
     m_result.success = !matches.empty();
     m_message = matches.empty()
         ? "No games found"
-        : std::to_string(matches.size()) + " games - pick one";
+        : std::to_string(matches.size()) + " games — pick one";
 }
 
 void SteamGridDbPickerScreen::setResult(BrowseResult result) {
@@ -104,9 +160,13 @@ void SteamGridDbPickerScreen::setResult(BrowseResult result) {
     }
 
     if (!m_result.success && !previousMatches.empty() && m_result.candidates.empty()) {
-        // Failed artwork load after a game pick - return to the list with the error.
+        // Failed artwork load after a game pick — return to the list with the error.
         showGameList(previousMatches);
-        m_message = m_result.error.empty() ? "Search failed" : m_result.error;
+        m_message = m_result.error.empty()
+            ? nxui::I18n::instance().tr(
+                  "settings.steamgriddb.search_failed",
+                  "Search failed. If HTTPS keeps failing, check the console clock in Settings > System.")
+            : m_result.error;
         return;
     }
 
@@ -115,9 +175,15 @@ void SteamGridDbPickerScreen::setResult(BrowseResult result) {
         m_gameMatches = m_result.gameMatches;
     else if (!previousMatches.empty())
         m_gameMatches = previousMatches;
-    m_message = m_result.success
-        ? std::to_string(m_result.candidates.size()) + " choices for " + m_result.gameName
-        : m_result.error;
+    if (m_result.success) {
+        m_message = std::to_string(m_result.candidates.size()) + " choices for " + m_result.gameName;
+    } else if (m_result.error.empty()) {
+        m_message = nxui::I18n::instance().tr(
+            "settings.steamgriddb.search_failed",
+            "Search failed. If HTTPS keeps failing, check the console clock in Settings > System.");
+    } else {
+        m_message = m_result.error;
+    }
     schedulePreviews();
 }
 
@@ -311,22 +377,77 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
     const nxui::Rect panel{70.f, 38.f, 1140.f, 644.f};
     renderer.drawRoundedRect(panel, m_theme->panelBase.withAlpha(0.98f), 28.f);
     renderer.drawRoundedRectOutline(panel, m_theme->panelBorder.withAlpha(0.45f), 28.f, 1.5f);
-    if (m_font)
-        renderer.drawText("SteamGridDB - " + kindLabel(), {108.f, 68.f}, m_font,
+
+    nxui::Font* titleFont = m_font ? m_font : m_smallFont;
+    nxui::Font* bodyFont = m_smallFont ? m_smallFont : m_font;
+    if (titleFont) {
+        renderer.drawText("SteamGridDB - " + kindLabel(), {108.f, 62.f}, titleFont,
                           m_theme->textPrimary, 1.f);
-    if (m_smallFont) {
-        renderer.drawText(m_result.title, {108.f, 110.f}, m_smallFont,
-                          m_theme->textSecondary, 0.78f);
-        renderer.drawText("Search: " + m_result.query + "   [X] Change name",
-                          {108.f, 139.f}, m_smallFont, m_theme->textSecondary, 0.72f);
-        renderer.drawText(m_message, {108.f, 169.f}, m_smallFont,
-                          m_theme->textPrimary, 0.72f);
+        if (!m_result.title.empty())
+            renderer.drawText(m_result.title, {108.f, 104.f}, titleFont,
+                              m_theme->textSecondary, 0.82f);
+    }
+    if (bodyFont) {
+        // Keep search controls at near-native small-font size (old 0.72 scale
+        // made the query / Change name row almost unreadable on TV).
+        const std::string searchLine = "Search  " + m_result.query;
+        renderer.drawText(searchLine, {108.f, 148.f}, bodyFont,
+                          m_theme->textPrimary, 1.f);
+        const float searchW = bodyFont->measure(searchLine).x;
+        renderer.drawText("X  Change name", {108.f + searchW + 28.f, 148.f}, bodyFont,
+                          m_theme->cursorNormal, 1.f);
+    }
+
+    const bool showStatusPanel = !m_loading && !m_pickingGame && !m_result.success
+        && m_result.candidates.empty() && m_gameMatches.empty() && !m_message.empty();
+    if (!showStatusPanel && bodyFont && !m_message.empty() && !m_loading) {
+        renderer.drawText(m_message, {108.f, 188.f}, bodyFont,
+                          m_theme->textSecondary, 0.95f);
     }
 
     if (m_loading) {
         const float pulse = 0.45f + 0.35f * std::sin(m_spinner * 5.f);
         renderer.drawRoundedRect({570.f, 340.f, 140.f, 12.f},
                                  m_theme->cursorNormal.withAlpha(pulse), 6.f);
+        if (bodyFont && !m_message.empty())
+            renderer.drawText(m_message, {108.f, 188.f}, bodyFont,
+                              m_theme->textSecondary, 0.95f);
+        return;
+    }
+
+    if (showStatusPanel) {
+        const nxui::Rect status{170.f, 250.f, 940.f, 300.f};
+        const bool transport = looksLikeTransportError(m_message);
+        const nxui::Color fill = transport
+            ? nxui::Color(0.42f, 0.18f, 0.14f, 0.55f)
+            : m_theme->panelBorder.withAlpha(0.28f);
+        const nxui::Color outline = transport
+            ? nxui::Color(0.92f, 0.55f, 0.42f, 0.70f)
+            : m_theme->panelBorder.withAlpha(0.45f);
+        renderer.drawRoundedRect(status, fill, 22.f);
+        renderer.drawRoundedRectOutline(status, outline, 22.f, 2.f);
+
+        const std::string headline = transport
+            ? nxui::I18n::instance().tr("settings.steamgriddb.https_clock_title",
+                                        "Couldn't reach SteamGridDB")
+            : "Search failed";
+        float textY = status.y + 36.f;
+        if (titleFont) {
+            renderer.drawText(headline, {status.x + 40.f, textY}, titleFont,
+                              m_theme->textPrimary, 0.95f);
+            textY += 52.f;
+        }
+        if (bodyFont) {
+            const auto lines = wrapLines(bodyFont, m_message, status.width - 80.f, 1.05f);
+            for (const auto& line : lines) {
+                renderer.drawText(line, {status.x + 40.f, textY}, bodyFont,
+                                  m_theme->textPrimary, 1.05f);
+                textY += 34.f;
+            }
+            renderer.drawText("B Back   X Try another search",
+                              {status.x + 40.f, status.y + status.height - 48.f},
+                              bodyFont, m_theme->textSecondary, 0.95f);
+        }
         return;
     }
 
@@ -338,7 +459,7 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
         constexpr float rowGap = 8.f;
         for (int local = 0; local < kGameListVisible; ++local) {
             const int index = windowStart + local;
-            const nxui::Rect row{105.f, 210.f + local * (rowH + rowGap), 1070.f, rowH};
+            const nxui::Rect row{105.f, kContentTop + local * (rowH + rowGap), 1070.f, rowH};
             m_visibleRects[(size_t)local] = row;
             if (index >= count) continue;
             const bool focused = index == m_selected;
@@ -347,15 +468,15 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
             if (focused)
                 renderer.drawRoundedRectOutline(row.expanded(3.f), m_theme->cursorNormal,
                                                 16.f, 3.5f);
-            if (m_smallFont) {
+            if (bodyFont) {
                 const auto& match = m_gameMatches[(size_t)index];
-                renderer.drawText(match.name, {128.f, row.y + 14.f}, m_smallFont,
-                                  m_theme->textPrimary, 0.86f);
+                renderer.drawText(match.name, {128.f, row.y + 14.f}, bodyFont,
+                                  m_theme->textPrimary, 1.f);
             }
         }
-        if (m_smallFont && count > 0) {
+        if (bodyFont && count > 0) {
             renderer.drawText("A Choose game   B Back   X Search",
-                              {108.f, 651.f}, m_smallFont, m_theme->textSecondary, 0.72f);
+                              {108.f, 651.f}, bodyFont, m_theme->textSecondary, 0.95f);
         }
         return;
     }
@@ -370,7 +491,7 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
     for (int local = 0; local < kPerPage; ++local) {
         const int index = start + local;
         const nxui::Rect card{105.f + (local % kColumns) * (cardW + gapX),
-                              210.f + (local / kColumns) * (cardH + gapY), cardW, cardH};
+                              kContentTop + (local / kColumns) * (cardH + gapY), cardW, cardH};
         m_visibleRects[(size_t)local] = card;
         if (index >= count) continue;
         renderer.drawRoundedRect(card, m_theme->panelBorder.withAlpha(0.22f), 16.f);
@@ -387,12 +508,12 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
             renderer.drawRoundedRectOutline(card.expanded(4.f), m_theme->cursorNormal,
                                             19.f, 4.f);
     }
-    if (m_smallFont && count > 0) {
+    if (bodyFont && count > 0) {
         const int pages = (count + kPerPage - 1) / kPerPage;
         const char* backHint = m_gameMatches.empty() ? "B Back" : "B Games";
         renderer.drawText(std::string("A Apply   ") + backHint + "   X Search   Page "
                           + std::to_string(page + 1) + "/" + std::to_string(pages),
-                          {108.f, 651.f}, m_smallFont, m_theme->textSecondary, 0.72f);
+                          {108.f, 651.f}, bodyFont, m_theme->textSecondary, 0.95f);
     }
 }
 

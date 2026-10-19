@@ -1,6 +1,7 @@
 #pragma once
 
 #include "TabbedOverlayScreen.hpp"
+#include <cstdint>
 #include <future>
 
 namespace settings::tabs {
@@ -27,6 +28,17 @@ public:
     void onGridRowsChange(IntCb cb)     { m_gridRowsCb = std::move(cb); }
     void onUiLanguageChange(StringCb cb) { m_uiLanguageCb = std::move(cb); }
     void onClockUse12HourChange(BoolCb cb) { m_clockUse12HourCb = std::move(cb); }
+    void onWebClockSyncChange(BoolCb cb) { m_webClockSyncCb = std::move(cb); }
+    using ExternalToastCb = std::function<void(const std::string& msg, float holdSeconds)>;
+    void onExternalToast(ExternalToastCb cb) { m_externalToastCb = std::move(cb); }
+    using ClockSyncBootRetryCb = std::function<void(const std::string& error)>;
+    void onClockSyncBootRetry(ClockSyncBootRetryCb cb) {
+        m_clockSyncBootRetryCb = std::move(cb);
+    }
+
+    void startWebClockSync(bool toastFailureOnly = false);
+    void pollClockSync();
+    void openSettingDropdown(int rawIdx) { openDropdown(rawIdx); }
     void onAccessibilityEnabledChange(BoolCb cb) { m_accessibilityEnabledCb = std::move(cb); }
     void onAccessibilitySpeakHintsChange(BoolCb cb) { m_accessibilitySpeakHintsCb = std::move(cb); }
     void onAccessibilitySpeakContextEveryFocusChange(BoolCb cb) { m_accessibilitySpeakContextEveryFocusCb = std::move(cb); }
@@ -59,6 +71,10 @@ public:
     void setClockUse12HourState(bool enabled) {
         m_clockUse12Hour = enabled;
     }
+    void setWebClockSyncState(bool enabled) {
+        m_webClockSyncEnabled = enabled;
+    }
+    bool webClockSyncEnabled() const { return m_webClockSyncEnabled; }
     void setAccessibilityEnabledState(bool enabled) {
         m_accessibilityEnabled = enabled;
         setAccessibilityVoiceEnabled(enabled);
@@ -117,6 +133,9 @@ private:
     IntCb m_gridRowsCb;
     StringCb m_uiLanguageCb;
     BoolCb m_clockUse12HourCb;
+    BoolCb m_webClockSyncCb;
+    ExternalToastCb m_externalToastCb;
+    ClockSyncBootRetryCb m_clockSyncBootRetryCb;
     BoolCb m_accessibilityEnabledCb;
     BoolCb m_accessibilitySpeakHintsCb;
     BoolCb m_accessibilitySpeakContextEveryFocusCb;
@@ -140,6 +159,8 @@ private:
     int m_gridRows = 3;
     std::string m_uiLanguageOverride = "auto";
     bool m_clockUse12Hour = false;
+    bool m_webClockSyncEnabled = false;
+    bool m_clockSyncToastFailureOnly = false;
     bool m_accessibilityEnabled = true;
     bool m_accessibilitySpeakHints = true;
     bool m_accessibilitySpeakContextEveryFocus = false;
@@ -163,9 +184,17 @@ private:
     std::vector<std::future<Tab>> m_tabTasks;
     int m_nextPrefetchTab = 0;
 
+    struct ClockSyncFetch {
+        bool ok = false;
+        std::uint64_t posixUtc = 0;
+        std::string error;
+    };
+    std::future<ClockSyncFetch> m_clockSyncFuture;
+
     Tab buildTabNow(int tabIndex);
     Tab makeLoadingTab(int tabIndex) const;
     void startAsyncTabLoad(int tabIndex);
     void pollTabLoaders();
     void prefetchOneTab();
+    void emitClockSyncToast(const std::string& msg, float holdSeconds = 2.5f);
 };
