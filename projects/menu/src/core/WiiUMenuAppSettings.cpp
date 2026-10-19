@@ -791,8 +791,7 @@ void WiiUMenuApp::createQuickSettings() {
         // drawer even though it is created lazily.
         for (const auto& overlay : {std::static_pointer_cast<nxui::Widget>(m_dialog),
                                    std::static_pointer_cast<nxui::Widget>(m_progressDialog),
-                                   std::static_pointer_cast<nxui::Widget>(m_launchAnim),
-                                   std::static_pointer_cast<nxui::Widget>(m_pointerCursor)}) {
+                                   std::static_pointer_cast<nxui::Widget>(m_launchAnim)}) {
             if (!overlay) continue;
             m_overlayLayer->removeChild(overlay.get());
             m_overlayLayer->addChild(overlay);
@@ -2545,11 +2544,6 @@ void WiiUMenuApp::applyTheme() {
     m_cursor->setColor(m_theme.cursorNormal);
     m_cursor->setCornerRadius(m_theme.cursorCornerRadius);
     m_cursor->setBorderWidth(m_theme.cursorBorderWidth);
-    if (m_pointerCursor) {
-        m_pointerCursor->setColor(m_theme.cursorNormal);
-        m_pointerCursor->setCornerRadius(15.f);
-        m_pointerCursor->setBorderWidth(2.5f);
-    }
     DebugLog::log("[theme-apply] widget recolor cursors done");
 
     m_clock->setBaseColor(m_theme.panelBase);

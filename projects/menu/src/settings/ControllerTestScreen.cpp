@@ -44,8 +44,6 @@ void ControllerTestScreen::show() {
     m_scale.setImmediate(0.92f);
     m_scale.set(1.f, 0.24f, nxui::Easing::outCubic);
     setVisible(true);
-    if (m_input)
-        m_input->setVirtualPointerShortcutsEnabled(false);
     setupActions();
     if (m_accessibilityCb)
         m_accessibilityCb(nxui::I18n::instance().tr("controller_test.opened", "Controller test. Tilt a stick briefly to select it. Hold B for one second or press HOME to close."));
@@ -55,8 +53,6 @@ void ControllerTestScreen::hide() {
     if (!m_active || m_animatingOut)
         return;
     m_animatingOut = true;
-    if (m_input)
-        m_input->setVirtualPointerShortcutsEnabled(true);
     if (m_closeSfxCb) m_closeSfxCb();
     m_alpha.set(0.f, 0.18f, nxui::Easing::outCubic);
     m_scale.set(0.96f, 0.18f, nxui::Easing::outCubic);

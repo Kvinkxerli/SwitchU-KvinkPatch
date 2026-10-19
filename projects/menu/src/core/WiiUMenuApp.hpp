@@ -406,7 +406,6 @@ private:
     std::shared_ptr<WaraWaraBackground> m_background;
     std::shared_ptr<IconGrid>          m_grid;
     std::shared_ptr<SelectionCursor>   m_cursor;
-    std::shared_ptr<SelectionCursor>   m_pointerCursor;
     std::shared_ptr<DateTimeWidget>    m_clock;
     std::shared_ptr<BatteryWidget>     m_battery;
     std::shared_ptr<TitlePillWidget>   m_titlePill;

@@ -210,8 +210,7 @@ void DebugImGuiOverlay::updateInput(nxui::GpuDevice& gpu, const nxui::Input& inp
     io.DeltaTime = std::max(m_deltaTime, 1.0f / 240.0f);
 
     const bool hasPointerPosition = input.isTouching()
-        || input.touchUp()
-        || input.virtualPointerEnabled();
+        || input.touchUp();
 
     if (hasPointerPosition) {
         io.AddMousePosEvent(input.touchX(), input.touchY());
@@ -223,7 +222,7 @@ void DebugImGuiOverlay::updateInput(nxui::GpuDevice& gpu, const nxui::Input& inp
     if (input.touchUp()) io.AddMouseButtonEvent(0, false);
 }
 
-void DebugImGuiOverlay::drawWindow(nxui::Renderer& ren, nxui::Input& input, bool& open) {
+void DebugImGuiOverlay::drawWindow(nxui::Renderer& ren, bool& open) {
     auto& lg = ren.liquidGlassSettings();
     auto& settingsGlass = settings::debug::settingsGlassTuning();
     bool rawBackdrop = ren.liquidGlassDebugRawBackdrop();
@@ -354,13 +353,6 @@ void DebugImGuiOverlay::drawWindow(nxui::Renderer& ren, nxui::Input& input, bool
     ImGui::SliderFloat("Settings Light Tint", &settingsGlass.tintAlphaLight, 0.0f, 0.5f);
     ImGui::SliderFloat("Settings Saturation", &settingsGlass.saturation, 0.0f, 2.0f);
 
-    ImGui::SeparatorText("Gyro Pointer");
-    float gyroSensitivity = input.virtualPointerSensitivity();
-    if (ImGui::SliderFloat("Gyro Sensitivity", &gyroSensitivity, 200.0f, 10000.0f, "%.0f")) {
-        input.setVirtualPointerSensitivity(gyroSensitivity);
-    }
-    ImGui::Text("Pointer: %s", input.virtualPointerEnabled() ? "On" : "Off");
-
     ImGui::End();
 }
 
@@ -383,7 +375,7 @@ void DebugImGuiOverlay::render(nxui::Renderer& ren, nxui::Input& input, bool& op
 
     updateInput(ren.gpu(), input);
     ImGui::NewFrame();
-    drawWindow(ren, input, open);
+    drawWindow(ren, open);
     ImGui::Render();
 
     m_wantsTouchCapture = ImGui::GetIO().WantCaptureMouse;

@@ -8,6 +8,7 @@
 #include "DebugLog.hpp"
 #include "bluetooth/BluetoothManager.hpp"
 #include "LeaveFrameCache.hpp"
+#include "screen_fit.hpp"
 #include <switch.h>
 #ifdef SWITCHU_MENU
 #include "smi_commands.hpp"
@@ -670,8 +671,6 @@ void WiiUMenuApp::setLeaveMotionFrozen(bool frozen) {
         m_background->setMotionPaused(frozen);
     if (m_cursor)
         m_cursor->setMotionPaused(frozen);
-    if (m_pointerCursor)
-        m_pointerCursor->setMotionPaused(frozen);
     if (m_grid) {
         for (auto& icon : m_grid->allIcons()) {
             if (icon)
@@ -4098,8 +4097,6 @@ void WiiUMenuApp::buildGrid() {
 
     m_cursor = std::make_shared<SelectionCursor>();
     m_cursor->setInstantMotion(m_config.cursorMotionMode == 1);
-    m_pointerCursor = std::make_shared<SelectionCursor>();
-    m_pointerCursor->setVisible(false);
 
     m_clock = std::make_shared<DateTimeWidget>();
     m_clock->setSize(150, 62);
@@ -4528,7 +4525,6 @@ void WiiUMenuApp::buildGrid() {
     m_overlayLayer->addChild(m_dialog);
     m_overlayLayer->addChild(m_progressDialog);
     m_overlayLayer->addChild(m_launchAnim);
-    m_overlayLayer->addChild(m_pointerCursor);
 
     root.addChild(m_bgLayer);
     root.addChild(m_contentLayer);
@@ -5032,6 +5028,13 @@ void WiiUMenuApp::leaveSystemSleep() {
         return;
     m_systemAsleep = false;
     app().setSleeping(false);
+
+    // The vi layer/swapchain goes stale across sleep: PresentQueue::acquireImage
+    // would block forever and freeze the menu on the last presented frame.
+    // Rebuild the swapchain, then re-apply the TV underscan size (the managed
+    // layer size can be reset by the OS during sleep) before presenting again.
+    app().gpu().recreateSwapchain();
+    switchu::menu::applyScreenUnderscan();
 
     if (m_musicWasPlayingBeforeSleep && m_config.musicEnabled)
         m_audio.play();
@@ -5888,23 +5891,6 @@ void WiiUMenuApp::onUpdateAwake(float dt) {
     }
 
     m_sidebar.update(dt, focusManager().current());
-
-    if (m_pointerCursor) {
-        bool showPointer = app().input().virtualPointerEnabled();
-        m_pointerCursor->setVisible(showPointer);
-        if (showPointer) {
-            constexpr float kPointerSize = 30.f;
-            float half = kPointerSize * 0.5f;
-            nxui::Rect pointerRect {
-                app().input().virtualPointerX() - half,
-                app().input().virtualPointerY() - half,
-                kPointerSize,
-                kPointerSize,
-            };
-            m_pointerCursor->setOpacity(app().input().isTouching() ? 1.f : 0.92f);
-            m_pointerCursor->moveTo(pointerRect, half, 0.06f);
-        }
-    }
 
     nxui::AnimationManager::instance().update(motionDt);
 

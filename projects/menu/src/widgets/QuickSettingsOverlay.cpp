@@ -1771,10 +1771,7 @@ void QuickSettingsOverlay::show() {
     closePlaylist();
     m_playlistAnim = 0.f;
 
-    // L3/R3 are music shortcuts here — don't let Input's gyro pointer steal them.
-    if (m_input)
-        m_input->setVirtualPointerShortcutsEnabled(false);
-
+    // L3/R3 are music shortcuts here.
     refreshHardwareStatus();
     refreshMusicState();
     updateCursorTarget();
@@ -1793,8 +1790,6 @@ void QuickSettingsOverlay::hide() {
     m_coverFsPlaylistAnim = 0.f;
     m_playlistEyeFocused = false;
     m_playlistArtFocused = false;
-    if (m_input)
-        m_input->setVirtualPointerShortcutsEnabled(true);
     setFocusable(false);
     DebugLog::log("[quicksettings] hiding");
 }
