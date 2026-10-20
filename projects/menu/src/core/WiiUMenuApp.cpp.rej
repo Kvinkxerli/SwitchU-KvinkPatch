@@ -1,0 +1,26 @@
+--- projects/menu/src/core/WiiUMenuApp.cpp
++++ projects/menu/src/core/WiiUMenuApp.cpp
+@@ -5889,23 +5916,6 @@ void WiiUMenuApp::onUpdateAwake(float dt) {
+ 
+     m_sidebar.update(dt, focusManager().current());
+ 
+-    if (m_pointerCursor) {
+-        bool showPointer = app().input().virtualPointerEnabled();
+-        m_pointerCursor->setVisible(showPointer);
+-        if (showPointer) {
+-            constexpr float kPointerSize = 30.f;
+-            float half = kPointerSize * 0.5f;
+-            nxui::Rect pointerRect {
+-                app().input().virtualPointerX() - half,
+-                app().input().virtualPointerY() - half,
+-                kPointerSize,
+-                kPointerSize,
+-            };
+-            m_pointerCursor->setOpacity(app().input().isTouching() ? 1.f : 0.92f);
+-            m_pointerCursor->moveTo(pointerRect, half, 0.06f);
+-        }
+-    }
+-
+     nxui::AnimationManager::instance().update(motionDt);
+ 
+     // In dynamic-line mode, and while a layout morph is in flight, the focused

@@ -1,0 +1,11 @@
+--- projects/menu/src/debug/DebugImGuiOverlay.cpp
++++ projects/menu/src/debug/DebugImGuiOverlay.cpp
+@@ -383,7 +375,7 @@ void DebugImGuiOverlay::render(nxui::Renderer& ren, nxui::Input& input, bool& op
+ 
+     updateInput(ren.gpu(), input);
+     ImGui::NewFrame();
+-    drawWindow(ren, input, open);
++    drawWindow(ren, open);
+     ImGui::Render();
+ 
+     m_wantsTouchCapture = ImGui::GetIO().WantCaptureMouse;

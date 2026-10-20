@@ -1034,5 +1034,28 @@
     "hint_art_games": "A Apply   B Games   X Search   Page {}/{}",
     "loading_for": "Loading artwork for {}...",
     "applying": "Applying selection..."
+  },
+  "controllers": {
+    "title": "Controllers",
+    "opened": "Controllers. Up and Down select a player, Y swaps with the next player, X changes grip, Plus pairs a new controller, Minus tests input, B closes.",
+    "player": "Player",
+    "handheld_slot": "Handheld",
+    "disconnected": "Not connected",
+    "handheld": "Handheld mode",
+    "pro": "Pro Controller",
+    "joycon_pair": "Joy-Con (L + R)",
+    "joycon_l": "Joy-Con (L)",
+    "joycon_r": "Joy-Con (R)",
+    "gamecube": "GameCube controller",
+    "poke_ball": "Poke Ball Plus",
+    "other": "Other controller",
+    "battery_unavailable": "no data",
+    "swapped": "Player order changed",
+    "swap_failed": "Could not change order",
+    "grip_horizontal": "Joy-Con grip: horizontal (sideways)",
+    "grip_vertical": "Joy-Con grip: vertical (single Joy-Con)",
+    "grip_horizontal_short": "Grip: horizontal",
+    "grip_vertical_short": "Grip: vertical",
+    "footer": "↑↓ Select   Y: Swap with next   X: Grip   +: Pair new   −: Test   B: Close"
   }
 }

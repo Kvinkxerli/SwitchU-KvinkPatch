@@ -1,0 +1,14 @@
+--- projects/menu/src/settings/ControllerTestScreen.hpp
++++ projects/menu/src/settings/ControllerTestScreen.hpp
+@@ -66,6 +77,11 @@ private:
+     float m_bHoldTime = 0.f;
+     nxui::AnimatedFloat m_touchFullscreenAnim;
+     std::vector<nxui::Vec2> m_touchTrace;
++    Mode m_mode = Mode::Test;
++    int m_managerSel = 0;
++    std::string m_status;
++    float m_statusTime = 0.f;
++    VoidCb m_pairingCb;
+     VoidCb m_closedCb;
+     VoidCb m_closeSfxCb;
+     StringCb m_accessibilityCb;

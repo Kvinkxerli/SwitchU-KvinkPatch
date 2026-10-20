@@ -1577,8 +1577,20 @@ static void handleMenuCommand() {
 }
 
 static Result relaunchMenuAfterApplet(const char* appletName) {
+    // A black screen after a library applet means the menu never came back.
+    // Retry a few times (the previous menu instance may still be tearing down)
+    // and fall back to a plain main-menu start before giving up.
     const auto status = buildSystemStatus();
-    const Result rc = daemon::menu_la::launch(smi::MenuStartMode::AppletReturn, status);
+    Result rc = daemon::menu_la::launch(smi::MenuStartMode::AppletReturn, status);
+    for (int attempt = 1; R_FAILED(rc) && attempt <= 4; ++attempt) {
+        switchu::FileLog::log("[action] %s menu restore retry %d (last rc=0x%X)",
+                              appletName, attempt, rc);
+        svcSleepThread(250'000'000ULL * attempt);
+        appletRequestToGetForeground();
+        rc = daemon::menu_la::launch(attempt >= 3 ? smi::MenuStartMode::MainMenu
+                                                  : smi::MenuStartMode::AppletReturn,
+                                     buildSystemStatus());
+    }
     switchu::FileLog::log(
         "[action] %s menu restore rc=0x%X module=%u desc=%u running=%d suspended=0x%016lX",
         appletName, rc, R_MODULE(rc), R_DESCRIPTION(rc), status.app_running ? 1 : 0,

@@ -1,0 +1,11 @@
+--- projects/menu/src/settings/TabbedOverlayScreen.cpp
++++ projects/menu/src/settings/TabbedOverlayScreen.cpp
+@@ -862,7 +863,7 @@ void TabbedOverlayScreen::drawTrackChangedToast(nxui::Renderer& ren, const nxui:
+     nxui::Vec2 tsz = m_smallFont->measure(displayText);
+     if (tsz.x * 0.78f > maxTextWidth) {
+         while (!displayText.empty() && m_smallFont->measure(displayText + "...").x * 0.78f > maxTextWidth)
+-            displayText.pop_back();
++            nxui::popUtf8Codepoint(displayText);
+         displayText += "...";
+         tsz = m_smallFont->measure(displayText);
+     }

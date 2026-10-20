@@ -5,6 +5,7 @@
 #include <deko3d.hpp>
 #endif
 #include <string>
+#include <vector>
 #include <memory>
 
 struct SDL_Texture;
@@ -45,6 +46,12 @@ public:
     // Load from in-memory image data (JPEG/PNG via stb_image)
     bool loadFromMemory(GpuDevice& gpu, Renderer& ren,
                         const uint8_t* data, size_t dataSize, int maxSide = 0);
+
+    // CPU-only decode (+ optional downscale to maxSide) into tightly packed
+    // RGBA8. Thread-safe: lets workers do the expensive part so the render
+    // thread only has to call loadFromPixels().
+    static bool decodeToRgba(const uint8_t* data, size_t dataSize, int maxSide,
+                             std::vector<uint8_t>& outRgba, int& outW, int& outH);
 
     // Load from SDL_Surface-style data (RGBA8, row pitch may differ)
     bool loadFromSurface(GpuDevice& gpu, Renderer& ren,

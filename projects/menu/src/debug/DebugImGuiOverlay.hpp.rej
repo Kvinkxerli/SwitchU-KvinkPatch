@@ -1,0 +1,11 @@
+--- projects/menu/src/debug/DebugImGuiOverlay.hpp
++++ projects/menu/src/debug/DebugImGuiOverlay.hpp
+@@ -34,7 +34,7 @@ private:
+     bool createFontTexture(nxui::GpuDevice& gpu, nxui::Renderer& ren);
+     bool ensureDrawBuffers(nxui::GpuDevice& gpu, int slot, size_t vertexBytes, size_t indexBytes);
+     void updateInput(nxui::GpuDevice& gpu, const nxui::Input& input);
+-    void drawWindow(nxui::Renderer& ren, nxui::Input& input, bool& open);
++    void drawWindow(nxui::Renderer& ren, bool& open);
+     void renderDrawData(nxui::Renderer& ren, ImDrawData* drawData);
+ 
+     bool m_initialized = false;

@@ -28,7 +28,7 @@ namespace {
 constexpr int kCommunityPreviewGridCols = 2;
 constexpr int kCommunityPreviewVisibleRows = 2;
 constexpr int kCommunityPreviewEntriesPerPage = kCommunityPreviewGridCols * kCommunityPreviewVisibleRows;
-constexpr int kMaxPreviewUploadsPerFrame = 1;
+constexpr int kMaxPreviewUploadsPerFrame = 2;
 constexpr int kMaxPreviewDownloadsInFlight = kCommunityPreviewEntriesPerPage;
 constexpr int kCommunityPreviewMaxSide = 960;
 
@@ -487,13 +487,25 @@ void ThemeShopScreen::primeCommunityPreview(const std::string& previewPath) {
                     return;
             }
 
-            std::vector<std::uint8_t> bytes = themeshop::http::getBytes(url);
+            std::vector<std::uint8_t> encoded = themeshop::http::getBytes(url);
+            // Decode + downscale here on the worker; the render thread then only
+            // uploads ready pixels instead of stalling on JPEG/PNG decoding.
+            std::vector<std::uint8_t> rgba;
+            int w = 0, h = 0;
+            if (!encoded.empty()
+                && !nxui::Texture::decodeToRgba(encoded.data(), encoded.size(),
+                                                kCommunityPreviewMaxSide, rgba, w, h)) {
+                rgba.clear();
+            }
+            encoded = {};
             std::lock_guard<std::mutex> lk(slot->mutex);
             if (slot->cancelled) {
                 slot->bytes.clear();
                 return;
             }
-            slot->bytes = std::move(bytes);
+            slot->bytes = std::move(rgba);
+            slot->width = w;
+            slot->height = h;
             if (slot->bytes.empty()) {
                 slot->failureCount += 1;
                 slot->phase = PreviewPhase::Failed;
@@ -590,6 +602,7 @@ void ThemeShopScreen::syncFinishedCommunityPreviewLoads() {
         }
 
         std::vector<std::uint8_t> bytes;
+        int pixelW = 0, pixelH = 0;
         {
             std::lock_guard<std::mutex> lk(state->mutex);
             if (state->phase == PreviewPhase::Downloaded) {
@@ -597,6 +610,8 @@ void ThemeShopScreen::syncFinishedCommunityPreviewLoads() {
                     hasPendingWork = true;
                 } else {
                     bytes = std::move(state->bytes);
+                    pixelW = state->width;
+                    pixelH = state->height;
                 }
             }
         }
@@ -606,7 +621,8 @@ void ThemeShopScreen::syncFinishedCommunityPreviewLoads() {
 
         ++uploadsThisFrame;
         nxui::Texture uploaded;
-        bool ok = uploaded.loadFromMemory(*m_gpu, *m_renderer, bytes.data(), bytes.size(), kCommunityPreviewMaxSide);
+        bool ok = pixelW > 0 && pixelH > 0
+            && uploaded.loadFromPixels(*m_gpu, *m_renderer, bytes.data(), pixelW, pixelH);
         std::lock_guard<std::mutex> lk(state->mutex);
         state->bytes.clear();
         if (ok) {

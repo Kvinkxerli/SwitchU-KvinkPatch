@@ -1034,5 +1034,28 @@
     "hint_art_games": "A Применить   B К играм   X Поиск   Стр. {}/{}",
     "loading_for": "Загрузка обложек для «{}»...",
     "applying": "Применение выбора..."
+  },
+  "controllers": {
+    "title": "Контроллеры",
+    "opened": "Контроллеры. Вверх/вниз — выбор игрока, Y — поменять местами со следующим, X — хват, + — сопряжение, − — тест ввода, B — закрыть.",
+    "player": "Игрок",
+    "handheld_slot": "Портативный",
+    "disconnected": "Не подключён",
+    "handheld": "Портативный режим",
+    "pro": "Про-контроллер",
+    "joycon_pair": "Joy-Con (L + R)",
+    "joycon_l": "Joy-Con (L)",
+    "joycon_r": "Joy-Con (R)",
+    "gamecube": "Контроллер GameCube",
+    "poke_ball": "Poke Ball Plus",
+    "other": "Другой контроллер",
+    "battery_unavailable": "нет данных",
+    "swapped": "Порядок игроков изменён",
+    "swap_failed": "Не удалось изменить порядок",
+    "grip_horizontal": "Хват Joy-Con: горизонтальный (боковой)",
+    "grip_vertical": "Хват Joy-Con: вертикальный (один Joy-Con)",
+    "grip_horizontal_short": "Хват: горизонтальный",
+    "grip_vertical_short": "Хват: вертикальный",
+    "footer": "↑↓ Выбор   Y: Поменять   X: Хват   +: Сопряжение   −: Тест   B: Закрыть"
   }
 }

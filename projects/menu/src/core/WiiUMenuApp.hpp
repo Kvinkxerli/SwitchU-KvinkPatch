@@ -327,6 +327,7 @@ private:
     void refreshAutoThemeSummary();
     void pushGeoDisplayToScreen();
     void createControllerTest();
+    void openControllerManager();
     void reloadThemePresets();
     void refreshThemeShopState();
     std::vector<ThemeShopScreen::ThemeShopEntry> buildThemeShopEntries();
@@ -488,7 +489,7 @@ private:
         std::uint64_t revision = 0;
     };
 
-    nxui::ThreadPool m_threadPool{2};
+    nxui::ThreadPool m_threadPool{4};
     SidebarManager  m_sidebar;
     AppletLauncher  m_launcher;
     AppListLoader   m_appLoader;

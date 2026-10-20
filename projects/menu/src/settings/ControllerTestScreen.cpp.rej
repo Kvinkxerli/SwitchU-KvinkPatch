@@ -1,0 +1,15 @@
+--- projects/menu/src/settings/ControllerTestScreen.cpp
++++ projects/menu/src/settings/ControllerTestScreen.cpp
+@@ -341,6 +480,12 @@ void ControllerTestScreen::render(nxui::Renderer& ren) {
+     ren.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color::black().withAlpha(0.12f * alpha));
+     ren.drawFrostedInset(p, m_theme->panelBase.withAlpha(m_theme->mode == nxui::ThemeMode::Dark ? 0.95f : 0.96f),
+                         m_theme->panelBorder.withAlpha(0.32f), m_theme->panelHighlight.withAlpha(0.10f), 26.f, alpha);
++    if (m_mode == Mode::Manager) {
++        ren.drawText(nxui::I18n::instance().tr("controllers.title", "Controllers"),
++                     {p.x + 30.f, p.y + 24.f}, m_font, m_theme->textPrimary.withAlpha(alpha), 1.f);
++        drawManager(ren, p, alpha);
++        return;
++    }
+     ren.drawText(nxui::I18n::instance().tr("controller_test.title", "Controller Test"),
+                  {p.x + 30.f, p.y + 24.f}, m_font, m_theme->textPrimary.withAlpha(alpha), 1.f);
+     const std::string closeHint = nxui::I18n::instance().tr(

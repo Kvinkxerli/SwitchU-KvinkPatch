@@ -1,0 +1,52 @@
+--- lib/nxui/src/core/Texture.cpp
++++ lib/nxui/src/core/Texture.cpp
+@@ -294,26 +294,32 @@ bool Texture::loadFromMemory(GpuDevice& gpu, Renderer& ren,
+         float scale = std::min((float)maxSide / w, (float)maxSide / h);
+         int dw = std::max(1, (int)(w * scale));
+         int dh = std::max(1, (int)(h * scale));
+-        uint8_t* scaled = (uint8_t*)std::malloc((size_t)dw * dh * 4);
+-        if (scaled) {
+-            for (int y = 0; y < dh; ++y) {
+-                int sy = y * h / dh;
+-                for (int x = 0; x < dw; ++x) {
+-                    int sx = x * w / dw;
+-                    std::memcpy(scaled + ((size_t)y * dw + x) * 4,
+-                                pixels + ((size_t)sy * w + sx) * 4, 4);
+-                }
+-            }
+-            stbi_image_free(pixels);
+-            pixels = scaled;
+-            w = dw;
+-            h = dh;
++        outRgba.resize((size_t)dw * dh * 4);
++        for (int y = 0; y < dh; ++y) {
++            const uint8_t* srcRow = pixels + (size_t)(y * h / dh) * w * 4;
++            uint8_t* dstRow = outRgba.data() + (size_t)y * dw * 4;
++            for (int x = 0; x < dw; ++x)
++                std::memcpy(dstRow + (size_t)x * 4, srcRow + (size_t)(x * w / dw) * 4, 4);
+         }
++        outW = dw;
++        outH = dh;
++    } else {
++        outRgba.assign(pixels, pixels + (size_t)w * h * 4);
++        outW = w;
++        outH = h;
+     }
++    stbi_image_free(pixels);
++    return true;
++}
+ 
+-    bool ok = loadFromPixels(gpu, ren, pixels, w, h);
+-    std::free(pixels);
+-    return ok;
++bool Texture::loadFromMemory(GpuDevice& gpu, Renderer& ren,
++                             const uint8_t* data, size_t dataSize, int maxSide)
++{
++    std::vector<uint8_t> rgba;
++    int w = 0, h = 0;
++    if (!decodeToRgba(data, dataSize, maxSide, rgba, w, h))
++        return false;
++    return loadFromPixels(gpu, ren, rgba.data(), w, h);
+ }
+ 
+ bool Texture::loadFromSurface(GpuDevice& gpu, Renderer& ren,

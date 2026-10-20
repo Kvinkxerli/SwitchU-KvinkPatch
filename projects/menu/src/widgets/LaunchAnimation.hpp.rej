@@ -1,0 +1,13 @@
+--- projects/menu/src/widgets/LaunchAnimation.hpp
++++ projects/menu/src/widgets/LaunchAnimation.hpp
+@@ -52,8 +52,8 @@ private:
+     static constexpr float kMusicFadeDur = kZoomDur + kHoldDur + kFadeDur + kBlackDur;
+ 
+     // Resume: soft blackout only — no zoom or icon flare.
+-    static constexpr float kResumeFadeDur = 0.16f;
+-    static constexpr float kResumeHoldDur = 0.06f;
++    static constexpr float kResumeFadeDur = 0.12f;
++    static constexpr float kResumeHoldDur = 0.03f;
+     static constexpr float kResumeTotalDur = kResumeFadeDur + kResumeHoldDur;
+ 
+     nxui::Rect     m_from;

@@ -483,9 +483,9 @@ void WiiUMenuApp::createSettings() {
         startSteamGridDbScrape();
     });
     m_settings->onControllerPairing([this]() {
-        if (m_settings) m_settings->hide();
-        m_navigator.resetToHome();
-        scheduleLeaveCapture([this]() { m_launcher.launchControllerPairing(); });
+        // SwitchU's own controller manager; the system applet is only used
+        // for actually pairing new controllers (Plus inside the manager).
+        openControllerManager();
     });
     m_settings->onControllerRemapping([this]() {
         if (m_settings) m_settings->hide();
@@ -1451,6 +1451,14 @@ void WiiUMenuApp::refreshAutoThemeSummary() {
     m_themeShop->setAutoThemeSummary(summary);
 }
 
+void WiiUMenuApp::openControllerManager() {
+    if (!m_controllerTest || m_controllerTest->isActive()) return;
+    m_navigator.navigate(switchu::navigation::Route::ControllerTest);
+    m_controllerTest->showManager();
+    focusManager().setFocus(m_controllerTest.get());
+    m_audio.playSfx(Sfx::ModalShow);
+}
+
 void WiiUMenuApp::createControllerTest() {
     if (m_controllerTest) return;
     m_controllerTest = std::make_shared<ControllerTestScreen>();
@@ -1459,6 +1467,12 @@ void WiiUMenuApp::createControllerTest() {
     m_controllerTest->setSmallFont(&m_fontSmall);
     m_controllerTest->setTheme(&m_theme);
     m_controllerTest->setInput(&app().input());
+    m_controllerTest->onSystemPairing([this]() {
+        if (m_controllerTest) m_controllerTest->hide();
+        if (m_settings && m_settings->isActive()) m_settings->hide();
+        m_navigator.resetToHome();
+        scheduleLeaveCapture([this]() { m_launcher.launchControllerPairing(); });
+    });
     m_controllerTest->onCloseSfx([this]() { m_audio.playSfx(Sfx::ModalHide); });
     m_controllerTest->onAccessibilityAnnouncement([this](const std::string& text) {
         m_accessibility.announce(text);

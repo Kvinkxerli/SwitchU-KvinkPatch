@@ -4323,7 +4323,7 @@ void WiiUMenuApp::buildGrid() {
         scheduleLeaveCapture([this]() { m_launcher.launchMiiEditor(); });
     };
     sidebarActions.onControllers = [this]() {
-        scheduleLeaveCapture([this]() { m_launcher.launchControllerPairing(); });
+        openControllerManager();
     };
 #else
     sidebarActions.onAlbum       = [this]() { m_audio.playSfx(Sfx::Activate); };

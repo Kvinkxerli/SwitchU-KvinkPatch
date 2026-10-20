@@ -5,6 +5,7 @@
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Input.hpp>
 #include <nxui/Theme.hpp>
+#include <switch.h>
 #include <functional>
 #include <string>
 #include <vector>
@@ -23,6 +24,10 @@ public:
     void onCloseSfx(VoidCb cb) { m_closeSfxCb = std::move(cb); }
     void onAccessibilityAnnouncement(StringCb cb) { m_accessibilityCb = std::move(cb); }
 
+    // Controller manager (SwitchU's own replacement for the system
+    // "Controllers" applet): lists players, reorders them, switches grip.
+    void showManager();
+    void onSystemPairing(VoidCb cb) { m_pairingCb = std::move(cb); }
     void show();
     void hide();
     bool isActive() const { return m_active || m_animatingOut; }
@@ -32,6 +37,16 @@ public:
     void render(nxui::Renderer& ren) override;
 
 private:
+    enum class Mode { Test, Manager };
+    static constexpr int kPlayerRows = 9; // Player 1-8 + handheld
+    void updateManager(float dt);
+    void pollBatteries();
+    void drawBatteryIcon(nxui::Renderer& ren, nxui::Vec2 pos, const std::string& name,
+                         s16 charge, bool charging, bool connected,
+                         const nxui::Color& fg, const nxui::Color& dim, float alpha);
+    void drawManager(nxui::Renderer& ren, const nxui::Rect& panel, float alpha);
+    void setStatus(std::string text) { m_status = std::move(text); m_statusTime = 3.f; }
+
     enum class ActiveStick { None, Left, Right };
     struct ButtonVisual { nxui::Button button; const char* label; };
 
@@ -66,6 +81,22 @@ private:
     float m_bHoldTime = 0.f;
     nxui::AnimatedFloat m_touchFullscreenAnim;
     std::vector<nxui::Vec2> m_touchTrace;
+    Mode m_mode = Mode::Test;
+    int m_managerSel = 0;
+    std::string m_status;
+    float m_statusTime = 0.f;
+    // Battery polling cache: hidd samples arrive at a few Hz, so re-query
+    // the service at most twice per second and keep the last good values.
+    struct DeviceBattery {
+        s16 level = -1;    // hidd battery level, 0..4; -1 = unknown/no data
+        bool charging = false;
+        bool valid = false;
+    };
+    static constexpr int kMaxDevices = 12; // 10 npad ids + L/R split pair extras
+    DeviceBattery m_battery[kMaxDevices];
+    u8 m_batteryType[kMaxDevices] = {};
+    float m_batteryTimer = 1.f; // poll immediately on first frame
+    VoidCb m_pairingCb;
     VoidCb m_closedCb;
     VoidCb m_closeSfxCb;
     StringCb m_accessibilityCb;

@@ -140,7 +140,9 @@ private:
         int failureCount = 0;
         bool cancelled = false;
         std::string url;
-        std::vector<std::uint8_t> bytes;
+        std::vector<std::uint8_t> bytes; // decoded RGBA8 once phase == Downloaded
+        int width = 0;
+        int height = 0;
         std::future<void> future;
         nxui::Texture texture;
     };

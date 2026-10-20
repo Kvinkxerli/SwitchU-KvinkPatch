@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 constexpr float kStickSelectThreshold = 0.55f;
@@ -25,9 +26,288 @@ ControllerTestScreen::ControllerTestScreen() {
     setBlurEnabled(false);
 }
 
+namespace {
+constexpr HidNpadIdType kPlayerIds[] = {
+    HidNpadIdType_No1, HidNpadIdType_No2, HidNpadIdType_No3, HidNpadIdType_No4,
+    HidNpadIdType_No5, HidNpadIdType_No6, HidNpadIdType_No7, HidNpadIdType_No8,
+    HidNpadIdType_Handheld,
+};
+
+std::string styleName(u32 style) {
+    auto& i18n = nxui::I18n::instance();
+    if (style == 0)
+        return i18n.tr("controllers.disconnected", "Not connected");
+    if (style & HidNpadStyleTag_NpadHandheld)
+        return i18n.tr("controllers.handheld", "Handheld mode");
+    if (style & HidNpadStyleTag_NpadFullKey)
+        return i18n.tr("controllers.pro", "Pro Controller");
+    if (style & HidNpadStyleTag_NpadJoyDual)
+        return i18n.tr("controllers.joycon_pair", "Joy-Con (L + R)");
+    if (style & HidNpadStyleTag_NpadJoyLeft)
+        return i18n.tr("controllers.joycon_l", "Joy-Con (L)");
+    if (style & HidNpadStyleTag_NpadJoyRight)
+        return i18n.tr("controllers.joycon_r", "Joy-Con (R)");
+    if (style & HidNpadStyleTag_NpadGc)
+        return i18n.tr("controllers.gamecube", "GameCube controller");
+    if (style & HidNpadStyleTag_NpadPalma)
+        return i18n.tr("controllers.poke_ball", "Poke Ball Plus");
+    return i18n.tr("controllers.other", "Other controller");
+}
+} // namespace
+
+void ControllerTestScreen::showManager() {
+    if (m_active)
+        return;
+    show();
+    m_mode = Mode::Manager;
+    m_managerSel = 0;
+    m_status.clear();
+    m_statusTime = 0.f;
+    m_batteryTimer = 1.f; // force a fresh battery poll on the first frame
+    if (m_accessibilityCb)
+        m_accessibilityCb(nxui::I18n::instance().tr("controllers.opened",
+            "Controllers. Up and Down select a player, Y swaps with the next player, X changes grip, Plus pairs a new controller, Minus tests input, B closes."));
+}
+
+// Battery state comes from hidd through the public libnx hid API (<switch.h>):
+//   hidGetNpadDeviceType(id)          - bitfield of HidDeviceTypeBits_*, zero
+//                                       when nothing is assigned to the pad;
+//   hidGetNpadPowerInfoSingle(id,..)  - main device power info;
+//   hidGetNpadPowerInfoSplit(id,..)   - left/right power info for a detached
+//                                       Joy-Con pair (dual assignment mode).
+// HidPowerInfo carries { is_powered, is_charging, battery_level /* 0..4 */ }.
+// There is no percentage syscall in hid: the system UI itself only ever shows
+// these five levels, so we keep the raw 0..4 value and render it as bars.
+namespace {
+constexpr float kBatteryPollInterval = 0.5f;
+
+// Styles whose devices report no battery at all (wired GC, Poké Ball Plus,
+// virtual/debug pads).
+bool styleHasNoBattery(u32 style) {
+    return (style & (HidNpadStyleTag_NpadGc | HidNpadStyleTag_NpadPalma |
+                     HidNpadStyleTag_NpadSystem | HidNpadStyleTag_NpadSystemExt)) != 0;
+}
+} // namespace
+
+void ControllerTestScreen::pollBatteries() {
+    auto clearSlot = [&](int slot) {
+        m_battery[slot] = {};
+        m_batteryType[slot] = 0;
+    };
+    auto applyInfo = [&](int slot, const HidPowerInfo& info) {
+        DeviceBattery& b = m_battery[slot];
+        b.level = static_cast<s16>(info.battery_level > 4u ? 4u : info.battery_level);
+        b.charging = info.is_charging != 0;
+        b.valid = info.is_powered != 0;
+    };
+    // Slots 0..7 are Players 1-8, slot 8 is Handheld, slot 9 is the right
+    // half of Player 1's detached Joy-Con pair (if any).
+    for (int i = 0; i < 8; ++i) {
+        const HidNpadIdType id = kPlayerIds[i];
+        const u32 style = hidGetNpadStyleSet(id);
+        const u32 device = hidGetNpadDeviceType(id);
+        m_batteryType[i] = static_cast<u8>(device);
+        if (style == 0 || device == 0 || styleHasNoBattery(style)) {
+            clearSlot(i);
+            continue;
+        }
+        HidPowerInfo main{};
+        hidGetNpadPowerInfoSingle(id, &main);
+        applyInfo(i, main);
+        if (i == 0) {
+            // Detached-pair extras for the first row only (keeps the list tidy).
+            if (style & HidNpadStyleTag_NpadJoyDual) {
+                HidPowerInfo left{}, right{};
+                hidGetNpadPowerInfoSplit(id, &left, &right);
+                applyInfo(9, right);
+                m_batteryType[9] = static_cast<u8>(HidDeviceTypeBits_JoyRight);
+                // The single-info above belongs to the left half; prefer the
+                // explicit split reading so both glyphs stay in sync.
+                applyInfo(i, left);
+            } else {
+                clearSlot(9);
+                m_batteryType[9] = 0;
+            }
+        }
+    }
+    const u32 handheldStyle = hidGetNpadStyleSet(HidNpadIdType_Handheld);
+    const u32 handheldDevice = hidGetNpadDeviceType(HidNpadIdType_Handheld);
+    m_batteryType[8] = static_cast<u8>(handheldDevice);
+    if (handheldStyle == 0 || handheldDevice == 0) {
+        clearSlot(8);
+    } else {
+        HidPowerInfo info{};
+        hidGetNpadPowerInfoSingle(HidNpadIdType_Handheld, &info);
+        applyInfo(8, info);
+    }
+}
+
+void ControllerTestScreen::updateManager(float dt) {
+    if (m_statusTime > 0.f)
+        m_statusTime -= dt;
+    m_batteryTimer += dt;
+    if (m_batteryTimer >= kBatteryPollInterval) {
+        m_batteryTimer = 0.f;
+        pollBatteries();
+    }
+    if (!m_input)
+        return;
+    auto& i18n = nxui::I18n::instance();
+
+    if (m_input->isDown(nxui::Button::DUp))
+        m_managerSel = (m_managerSel + kPlayerRows - 1) % kPlayerRows;
+    if (m_input->isDown(nxui::Button::DDown))
+        m_managerSel = (m_managerSel + 1) % kPlayerRows;
+
+    if (m_input->isDown(nxui::Button::Y) && m_managerSel < 7) {
+        Result rc = hidSwapNpadAssignment(kPlayerIds[m_managerSel], kPlayerIds[m_managerSel + 1]);
+        if (R_SUCCEEDED(rc)) {
+            ++m_managerSel;
+            setStatus(i18n.tr("controllers.swapped", "Player order changed"));
+        } else {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "0x%X", (unsigned)rc);
+            setStatus(i18n.tr("controllers.swap_failed", "Could not change order") + " " + buf);
+        }
+        if (m_accessibilityCb) m_accessibilityCb(m_status);
+    }
+
+    if (m_input->isDown(nxui::Button::X)) {
+        HidNpadJoyHoldType hold = HidNpadJoyHoldType_Vertical;
+        hidGetNpadJoyHoldType(&hold);
+        hold = hold == HidNpadJoyHoldType_Vertical ? HidNpadJoyHoldType_Horizontal
+                                                   : HidNpadJoyHoldType_Vertical;
+        hidSetNpadJoyHoldType(hold);
+        setStatus(hold == HidNpadJoyHoldType_Horizontal
+            ? i18n.tr("controllers.grip_horizontal", "Joy-Con grip: horizontal (sideways)")
+            : i18n.tr("controllers.grip_vertical", "Joy-Con grip: vertical (single Joy-Con)"));
+        if (m_accessibilityCb) m_accessibilityCb(m_status);
+    }
+
+    if (m_input->isDown(nxui::Button::Plus) && m_pairingCb)
+        m_pairingCb();
+
+    if (m_input->isDown(nxui::Button::Minus)) {
+        m_mode = Mode::Test;
+        setupActions();
+        return;
+    }
+
+    if (m_input->isDown(nxui::Button::B))
+        hide();
+}
+
+// Battery glyph: a small horizontal cell with 4 bars (like the system UI),
+// plus an optional bolt-ish "+" marker while charging. Unknown state renders
+// as an outlined empty cell so rows never jump around. `level` is the raw
+// hidd value 0..4 (-1 = no data).
+void ControllerTestScreen::drawBatteryIcon(nxui::Renderer& ren, nxui::Vec2 pos,
+                                           const std::string& name, s16 level,
+                                           bool charging, bool connected,
+                                           const nxui::Color& fg, const nxui::Color& dim,
+                                           float alpha) {
+    constexpr float kW = 30.f;
+    constexpr float kH = 15.f;
+    nxui::Rect body{pos.x, pos.y, kW, kH};
+    const nxui::Color outline = connected ? fg.withAlpha(0.85f * alpha)
+                                          : dim.withAlpha(0.55f * alpha);
+    ren.drawRoundedRectOutline(body, outline, 3.5f, 1.4f);
+    // Positive terminal nub on the right.
+    ren.drawRect({body.right() + 1.f, pos.y + kH * 0.30f, 2.5f, kH * 0.40f}, outline);
+
+    if (connected && level >= 0) {
+        const int filled = std::clamp(static_cast<int>(level), 0, 4);
+        // Red tint for critical battery (hidd reports at most one bar left),
+        // cursor accent otherwise - both work on light and dark themes.
+        const nxui::Color low{0.90f, 0.30f, 0.25f, 1.f};
+        const nxui::Color fillC = (filled <= 1 ? low : m_theme->cursorNormal)
+                                      .withAlpha(0.95f * alpha);
+        constexpr float kPad = 2.5f;
+        constexpr float kGap = 1.6f;
+        const float usableW = kW - 2.f * kPad - 3.f * kGap;
+        const float barW = usableW / 4.f;
+        for (int b = 0; b < filled; ++b)
+            ren.drawRect({body.x + kPad + b * (barW + kGap), body.y + kPad,
+                          barW, kH - 2.f * kPad}, fillC);
+    }
+
+    char pct[24];
+    if (!connected)
+        std::snprintf(pct, sizeof(pct), "%s", "--");
+    else if (level >= 0)
+        std::snprintf(pct, sizeof(pct), "%u%s", static_cast<unsigned>(level),
+                      charging ? " +" : "");
+    else {
+        const std::string noData =
+            nxui::I18n::instance().tr("controllers.battery_unavailable", "no data");
+        std::snprintf(pct, sizeof(pct), "%s", noData.c_str());
+    }
+    nxui::Vec2 sz = m_smallFont->measure(pct);
+    ren.drawText(pct, {pos.x + (kW - sz.x * 0.72f) * 0.5f, pos.y + kH + 3.f}, m_smallFont,
+                 (connected ? fg : dim).withAlpha((connected ? 0.9f : 0.55f) * alpha), 0.72f);
+}
+
+void ControllerTestScreen::drawManager(nxui::Renderer& ren, const nxui::Rect& p, float alpha) {
+    auto& i18n = nxui::I18n::instance();
+    nxui::Rect list{p.x + 30.f, p.y + 82.f, p.width - 60.f, 452.f};
+    drawPanel(ren, *m_theme, list, alpha);
+
+    HidNpadJoyHoldType hold = HidNpadJoyHoldType_Vertical;
+    hidGetNpadJoyHoldType(&hold);
+
+    const float rowH = 46.f;
+    for (int i = 0; i < kPlayerRows; ++i) {
+        nxui::Rect row{list.x + 14.f, list.y + 12.f + i * (rowH + 2.f), list.width - 28.f, rowH};
+        const u32 style = hidGetNpadStyleSet(kPlayerIds[i]);
+        const bool connected = style != 0;
+        const bool sel = i == m_managerSel;
+        if (sel) {
+            ren.drawRoundedRect(row, m_theme->cursorNormal.withAlpha(0.22f * alpha), 14.f);
+            ren.drawRoundedRectOutline(row, m_theme->cursorNormal.withAlpha(0.85f * alpha), 14.f, 2.f);
+        }
+        std::string name = i == 8
+            ? i18n.tr("controllers.handheld_slot", "Handheld")
+            : i18n.tr("controllers.player", "Player") + " " + std::to_string(i + 1);
+        ren.drawText(name, {row.x + 18.f, row.y + 10.f}, m_font,
+                     m_theme->textPrimary.withAlpha(alpha), 0.80f);
+        ren.drawText(styleName(style), {row.x + 250.f, row.y + 12.f}, m_smallFont,
+                     (connected ? m_theme->textPrimary : m_theme->textSecondary)
+                         .withAlpha((connected ? 1.f : 0.6f) * alpha), 0.80f);
+
+        // Battery column: split Joy-Con pairs show L and R glyphs side by side.
+        const DeviceBattery& main = m_battery[i];
+        const bool dualPair = (style & HidNpadStyleTag_NpadJoyDual) != 0 && i == 0;
+        float iconX = row.right() - (dualPair ? 150.f : 112.f);
+        drawBatteryIcon(ren, {iconX, row.y + 12.f}, name, main.level, main.charging,
+                        connected && main.valid, m_theme->textPrimary, m_theme->textSecondary, alpha);
+        if (dualPair) {
+            const DeviceBattery& rhalf = m_battery[9];
+            drawBatteryIcon(ren, {iconX + 46.f, row.y + 12.f}, name, rhalf.level,
+                            rhalf.charging, connected && rhalf.valid,
+                            m_theme->textPrimary, m_theme->textSecondary, alpha);
+        }
+        ren.drawCircle({row.right() - 28.f, row.y + rowH * 0.5f}, 8.f,
+                       (connected ? m_theme->cursorNormal : m_theme->panelBorder)
+                           .withAlpha((connected ? 0.95f : 0.35f) * alpha), 20);
+    }
+
+    std::string grip = hold == HidNpadJoyHoldType_Horizontal
+        ? i18n.tr("controllers.grip_horizontal_short", "Grip: horizontal")
+        : i18n.tr("controllers.grip_vertical_short", "Grip: vertical");
+    ren.drawText(grip, {p.x + 36.f, p.y + 548.f}, m_smallFont,
+                 m_theme->textSecondary.withAlpha(alpha), 0.76f);
+    if (m_statusTime > 0.f && !m_status.empty())
+        ren.drawText(m_status, {p.x + 36.f, p.y + 578.f}, m_smallFont,
+                     m_theme->textPrimary.withAlpha(alpha), 0.76f);
+    ren.drawText(i18n.tr("controllers.footer",
+                         "↑↓ Select   Y: Swap with next   X: Grip   +: Pair new   −: Test   B: Close"),
+                 {p.x + 36.f, p.y + 614.f}, m_smallFont, m_theme->textSecondary.withAlpha(alpha), 0.72f);
+}
+
 void ControllerTestScreen::show() {
     if (m_active)
         return;
+    m_mode = Mode::Test;
     m_active = true;
     m_animatingOut = false;
     m_activeStick = ActiveStick::None;
@@ -84,7 +364,7 @@ nxui::Rect ControllerTestScreen::touchPanelRect(float scale) const {
 }
 
 void ControllerTestScreen::handleTouch(nxui::Input& input) {
-    if (!m_active || m_animatingOut)
+    if (!m_active || m_animatingOut || m_mode == Mode::Manager)
         return;
 
     nxui::Rect zone{0.f, 0.f, 1280.f, 720.f};
@@ -169,6 +449,11 @@ void ControllerTestScreen::update(float dt) {
     }
     if (!m_active || !m_input)
         return;
+
+    if (m_mode == Mode::Manager) {
+        updateManager(dt);
+        return;
+    }
 
     if (m_input->isHeld(nxui::Button::B)) {
         m_bHoldTime += dt;
@@ -337,6 +622,12 @@ void ControllerTestScreen::render(nxui::Renderer& ren) {
     ren.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color::black().withAlpha(0.12f * alpha));
     ren.drawFrostedInset(p, m_theme->panelBase.withAlpha(m_theme->mode == nxui::ThemeMode::Dark ? 0.95f : 0.96f),
                         m_theme->panelBorder.withAlpha(0.32f), m_theme->panelHighlight.withAlpha(0.10f), 26.f, alpha);
+    if (m_mode == Mode::Manager) {
+        ren.drawText(nxui::I18n::instance().tr("controllers.title", "Controllers"),
+                     {p.x + 30.f, p.y + 24.f}, m_font, m_theme->textPrimary.withAlpha(alpha), 1.f);
+        drawManager(ren, p, alpha);
+        return;
+    }
     ren.drawText(nxui::I18n::instance().tr("controller_test.title", "Controller Test"),
                  {p.x + 30.f, p.y + 24.f}, m_font, m_theme->textPrimary.withAlpha(alpha), 1.f);
     const std::string closeHint = nxui::I18n::instance().tr(

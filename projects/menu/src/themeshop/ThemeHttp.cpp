@@ -14,13 +14,23 @@
 #include <cctype>
 #include <cstdio>
 #include <ctime>
+#include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <sstream>
 #include <stdexcept>
 
 namespace {
 
-std::mutex g_themeHttpMutex;
+// Transfers hold the shared lock and run concurrently; (re)initialising or
+// shutting the runtime down takes the exclusive lock.
+std::shared_mutex g_themeHttpMutex;
+// Idle curl handles. Re-using a handle keeps the TLS connection to the host
+// alive, which removes the handshake (several hundred ms on the Switch) from
+// every request after the first.
+std::mutex g_poolMutex;
+std::vector<std::unique_ptr<curlpp::Easy>> g_easyPool;
+constexpr std::size_t kMaxPooledHandles = 6;
 bool g_nifmInitialized = false;
 bool g_socketInitialized = false;
 bool g_curlInitialized = false;
@@ -37,7 +47,17 @@ bool runtimeInitializedLocked() {
     return g_nifmInitialized && g_socketInitialized && g_curlInitialized;
 }
 
+void drainEasyPool() {
+    std::vector<std::unique_ptr<curlpp::Easy>> doomed;
+    {
+        std::lock_guard<std::mutex> lk(g_poolMutex);
+        doomed.swap(g_easyPool);
+    }
+    doomed.clear();
+}
+
 void shutdownRuntimeLocked() {
+    drainEasyPool();
     if (g_curlInitialized) {
         curl_global_cleanup();
         g_curlInitialized = false;
@@ -108,7 +128,7 @@ bool isAbortRequested(const themeshop::http::AbortCheck& shouldAbort) {
 
 void configureRequest(curlpp::Easy& request,
                       const std::string& url,
-                      std::ostringstream& response,
+                      std::vector<std::uint8_t>& response,
                       const std::list<std::string>& headers,
                       const themeshop::http::ProgressCallback& onProgress = {},
                       const themeshop::http::AbortCheck& shouldAbort = {}) {
@@ -122,7 +142,16 @@ void configureRequest(curlpp::Easy& request,
     if (!headers.empty()) {
         request.setOpt<curlpp::options::HttpHeader>(headers);
     }
-    request.setOpt<curlpp::options::WriteStream>(&response);
+    // Let curl negotiate gzip/deflate (it decodes transparently) - catalog
+    // and manifest JSON shrink a lot. Empty string = every encoding built in.
+    request.setOpt<curlpp::options::AcceptEncoding>("");
+    request.setOpt<curlpp::options::WriteFunction>(
+        [&response](char* ptr, size_t size, size_t nmemb) -> size_t {
+            const size_t total = size * nmemb;
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(ptr);
+            response.insert(response.end(), bytes, bytes + total);
+            return total;
+        });
     if (onProgress || shouldAbort) {
         request.setOpt<curlpp::options::NoProgress>(false);
         request.setOpt<curlpp::options::ProgressFunction>(
@@ -138,6 +167,27 @@ void configureRequest(curlpp::Easy& request,
     }
 }
 
+std::unique_ptr<curlpp::Easy> acquireEasy() {
+    {
+        std::lock_guard<std::mutex> lk(g_poolMutex);
+        if (!g_easyPool.empty()) {
+            auto handle = std::move(g_easyPool.back());
+            g_easyPool.pop_back();
+            handle->reset(); // drops options, keeps live connections
+            return handle;
+        }
+    }
+    return std::make_unique<curlpp::Easy>();
+}
+
+void releaseEasy(std::unique_ptr<curlpp::Easy> handle) {
+    if (!handle)
+        return;
+    std::lock_guard<std::mutex> lk(g_poolMutex);
+    if (g_easyPool.size() < kMaxPooledHandles)
+        g_easyPool.push_back(std::move(handle));
+}
+
 std::vector<std::uint8_t> performRequestBytes(const std::string& url,
                                               const std::list<std::string>& headers,
                                               const themeshop::http::ProgressCallback& onProgress,
@@ -145,11 +195,11 @@ std::vector<std::uint8_t> performRequestBytes(const std::string& url,
     if (isAbortRequested(shouldAbort))
         throw std::runtime_error("Cancelled");
 
-    std::ostringstream response;
-    curlpp::Easy request;
-    configureRequest(request, url, response, headers, onProgress, shouldAbort);
+    std::vector<std::uint8_t> response;
+    auto request = acquireEasy();
+    configureRequest(*request, url, response, headers, onProgress, shouldAbort);
     try {
-        request.perform();
+        request->perform();
     } catch (const curlpp::LibcurlRuntimeError& ex) {
         if (isAbortRequested(shouldAbort))
             throw std::runtime_error("Cancelled");
@@ -179,33 +229,53 @@ std::vector<std::uint8_t> performRequestBytes(const std::string& url,
     if (isAbortRequested(shouldAbort))
         throw std::runtime_error("Cancelled");
 
-    long statusCode = curlpp::infos::ResponseCode::get(request);
-    std::string body = response.str();
+    long statusCode = curlpp::infos::ResponseCode::get(*request);
+    // Handle is healthy again: keep it (and its connection) for the next request.
+    releaseEasy(std::move(request));
     if (statusCode < 200 || statusCode >= 300) {
-        std::string detail = body.substr(0, 240);
+        std::string detail(response.begin(),
+                           response.begin() + std::min<std::size_t>(response.size(), 240));
         std::replace(detail.begin(), detail.end(), '\n', ' ');
         std::replace(detail.begin(), detail.end(), '\r', ' ');
         throw std::runtime_error("HTTP error " + std::to_string(statusCode)
                                  + (detail.empty() ? std::string() : ": " + detail));
     }
 
-    return std::vector<std::uint8_t>(body.begin(), body.end());
+    return response;
+}
+
+bool ensureRuntimeReady() {
+    {
+        std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
+        if (runtimeInitializedLocked())
+            return true;
+    }
+    std::unique_lock<std::shared_mutex> lk(g_themeHttpMutex);
+    return initializeRuntimeLocked();
+}
+
+void resetRuntime() {
+    std::unique_lock<std::shared_mutex> lk(g_themeHttpMutex);
+    shutdownRuntimeLocked();
 }
 
 std::vector<std::uint8_t> performBytes(const std::string& url,
                                        const std::list<std::string>& headers,
                                        const themeshop::http::ProgressCallback& onProgress = {},
                                        const themeshop::http::AbortCheck& shouldAbort = {}) {
-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
-
     std::string lastError = "Theme Shop HTTP request failed";
     for (int attempt = 1; attempt <= kRequestAttemptCount; ++attempt) {
         if (isAbortRequested(shouldAbort))
             throw std::runtime_error("Cancelled");
+        bool retryable = true;
         try {
-            if (!initializeRuntimeLocked()) {
+            if (!ensureRuntimeReady())
                 throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
-            }
+
+            // Shared lock: any number of transfers run in parallel.
+            std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
+            if (!runtimeInitializedLocked())
+                throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
 
             ensureInternetConnectionReady(url);
             auto bytes = performRequestBytes(url, headers, onProgress, shouldAbort);
@@ -219,6 +289,9 @@ std::vector<std::uint8_t> performBytes(const std::string& url,
                 lastError = "HTTPS request failed";
             if (lastError == "Cancelled" || isAbortRequested(shouldAbort))
                 throw std::runtime_error("Cancelled");
+            // A definite 4xx answer will not change on retry.
+            if (lastError.rfind("HTTP error 4", 0) == 0)
+                retryable = false;
             DebugLog::log("[themeshop] request failed (%d/%d): %s -> %s",
                           attempt,
                           kRequestAttemptCount,
@@ -234,8 +307,13 @@ std::vector<std::uint8_t> performBytes(const std::string& url,
                           url.c_str());
         }
 
+        if (!retryable)
+            break;
         if (attempt < kRequestAttemptCount) {
-            shutdownRuntimeLocked();
+            // Only tear the runtime down for connection-level failures, not for
+            // HTTP status errors (that would also kill other parallel transfers).
+            if (lastError.rfind("HTTP error", 0) != 0)
+                resetRuntime();
         }
     }
 
@@ -333,7 +411,6 @@ std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort)
         "https://1.1.1.1/",
     };
 
-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
     std::string lastError = "Clock sync request failed";
 
     for (const char* url : kUrls) {
@@ -341,7 +418,10 @@ std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort)
             if (isAbortRequested(shouldAbort))
                 throw std::runtime_error("Cancelled");
             try {
-                if (!initializeRuntimeLocked())
+                if (!ensureRuntimeReady())
+                    throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
+                std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
+                if (!runtimeInitializedLocked())
                     throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
                 ensureInternetConnectionReady(url);
                 return performUtcUnixTimeRequest(url, shouldAbort);
@@ -359,7 +439,7 @@ std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort)
                               attempt, kRequestAttemptCount, url);
             }
             if (attempt < kRequestAttemptCount)
-                shutdownRuntimeLocked();
+                resetRuntime();
         }
     }
 
@@ -371,23 +451,23 @@ std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort)
 namespace themeshop::http {
 
 bool initialize() {
-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
-    return initializeRuntimeLocked();
+    return ensureRuntimeReady();
 }
 
 void shutdown() {
-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
-    shutdownRuntimeLocked();
+    resetRuntime();
 }
 
 bool isInitialized() {
-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
+    std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
     return runtimeInitializedLocked();
 }
 
 bool isInternetReadyForHttp() {
-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
-    if (!initializeRuntimeLocked())
+    if (!ensureRuntimeReady())
+        return false;
+    std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
+    if (!runtimeInitializedLocked())
         return false;
 
     NifmInternetConnectionStatus status = NifmInternetConnectionStatus_ConnectingUnknown1;

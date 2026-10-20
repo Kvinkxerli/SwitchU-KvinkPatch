@@ -160,7 +160,24 @@ target("atmosphere-stratosphere")
             cprint("${color.build.target}cached${clear} libstratosphere")
             return
         end
-        os.execv("make", {"-C", "lib/Atmosphere-libs/libstratosphere", "nx_release"})
+        -- Build libstratosphere in parallel (the stock "nx_release" wrapper runs
+        -- a serial make, ~20 min). Calling libstratosphere.mk directly lets us
+        -- pass -j, drop debug info and silence third-party [[nodiscard]] noise.
+        local jobs = tostring(math.max(os.cpuinfo("ncpu") or 2, 2))
+        local branch = "detached"
+        local ok, out = pcall(os.iorunv, "git", {"-C", source_dir, "symbolic-ref", "--short", "HEAD"})
+        if ok and out and #out:trim() > 0 then branch = out:trim() end
+        os.execv("make", {
+            "-C", "lib/Atmosphere-libs/libstratosphere",
+            "-f", "libstratosphere.mk",
+            "-j" .. jobs,
+            "ATMOSPHERE_MAKEFILE_TARGET=nx_release",
+            "ATMOSPHERE_BUILD_NAME=release",
+            "ATMOSPHERE_BOARD=nx-hac-001",
+            "ATMOSPHERE_CPU=arm-cortex-a57",
+            "ATMOSPHERE_GIT_BRANCH=" .. branch,
+            "ATMOSPHERE_BUILD_SETTINGS=-Wno-unused-result -g0"
+        })
         stamp.write("libstratosphere", revision)
     end)
 target_end()

@@ -15,8 +15,10 @@
 #include <switch.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <stdexcept>
+#include <thread>
 
 namespace {
 
@@ -289,6 +291,8 @@ ThemeCatalogClient::Snapshot ThemeCatalogClient::loadCatalog(const std::string& 
         throw std::runtime_error("Catalog is missing the themes array");
 
     snapshot.entries.reserve(themesIt->size());
+    std::vector<std::size_t> needsManifest;
+    constexpr std::size_t kManifestWorkers = 6;
     for (const auto& item : *themesIt) {
         if (!item.is_object())
             continue;
@@ -311,24 +315,63 @@ ThemeCatalogClient::Snapshot ThemeCatalogClient::loadCatalog(const std::string& 
             continue;
         if (entry.manifest.empty())
             entry.manifest = deriveManifestPath(entry.path);
-        if ((entry.cover.empty() || entry.screenshots.empty()) && !entry.manifest.empty()) {
-            try {
-                PreviewData preview = derivePreviewDataFromManifest(url, entry);
-                if (entry.cover.empty())
-                    entry.cover = preview.cover;
-                for (auto& screenshotPath : preview.screenshots)
-                    appendUniqueString(entry.screenshots, std::move(screenshotPath));
-            } catch (const std::exception& ex) {
-                DebugLog::log("[themeshop] manifest preview fallback failed for %s: %s",
-                              entry.id.c_str(),
-                              ex.what());
-            }
-        }
-
-        ensureCoverFirst(entry);
+        if ((entry.cover.empty() || entry.screenshots.empty()) && !entry.manifest.empty())
+            needsManifest.push_back(snapshot.entries.size());
 
         snapshot.entries.push_back(std::move(entry));
     }
+
+    // Fetch the per-theme manifests in parallel (they used to be fetched one
+    // after another, which made opening the shop take N x round-trip time).
+    if (!needsManifest.empty()) {
+        std::vector<PreviewData> previews(needsManifest.size());
+        std::vector<char> fetched(needsManifest.size(), 0);
+        std::atomic<std::size_t> next{0};
+        const std::size_t workerCount = std::min<std::size_t>(kManifestWorkers, needsManifest.size());
+
+        auto work = [&]() {
+            for (;;) {
+                const std::size_t i = next.fetch_add(1);
+                if (i >= needsManifest.size())
+                    return;
+                const Entry& e = snapshot.entries[needsManifest[i]];
+                try {
+                    previews[i] = derivePreviewDataFromManifest(url, e);
+                    fetched[i] = 1;
+                } catch (const std::exception& ex) {
+                    DebugLog::log("[themeshop] manifest preview fallback failed for %s: %s",
+                                  e.id.c_str(), ex.what());
+                } catch (...) {
+                }
+            }
+        };
+
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount > 0 ? workerCount - 1 : 0);
+        for (std::size_t w = 1; w < workerCount; ++w) {
+            try {
+                workers.emplace_back(work);
+            } catch (...) {
+                break; // out of threads: remaining work runs on this one
+            }
+        }
+        work();
+        for (auto& t : workers)
+            t.join();
+
+        for (std::size_t i = 0; i < needsManifest.size(); ++i) {
+            if (!fetched[i])
+                continue;
+            Entry& e = snapshot.entries[needsManifest[i]];
+            if (e.cover.empty())
+                e.cover = previews[i].cover;
+            for (auto& shot : previews[i].screenshots)
+                appendUniqueString(e.screenshots, std::move(shot));
+        }
+    }
+
+    for (auto& e : snapshot.entries)
+        ensureCoverFirst(e);
 
     std::sort(snapshot.entries.begin(), snapshot.entries.end(), [](const Entry& lhs, const Entry& rhs) {
         if (lhs.name != rhs.name)
