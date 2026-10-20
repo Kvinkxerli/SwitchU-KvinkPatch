@@ -1,0 +1,16 @@
+--- projects/menu/src/widgets/IconGrid.cpp
++++ projects/menu/src/widgets/IconGrid.cpp
+@@ -346,9 +346,10 @@ nxui::Rect IconGrid::dynamicIconRect(int index, float* outScale,
+                                      float* outOpacity,
+                                      float* outDistance) const {
+     const float centerX = m_rect.x + m_rect.width * 0.5f;
+-    // Leave a dedicated control strip below the profiles, then place the app
+-    // carousel in the lower half of the HOME scene.
+-    const float centerY = m_rect.y + m_rect.height * 0.66f;
++    // The control strip sits at the top of the HOME scene; the carousel is
++    // centred vertically between it and the bottom hint area (it used to sit
++    // at 66 % of the grid height, which read as noticeably too low).
++    const float centerY = m_rect.y + m_rect.height * kLineCenterFraction;
+     const float offset = m_lineScrollOffset.value();
+     // Carousel sizing is intentionally independent from the configurable
+     // grid rows/columns. Changing the grid density must not resize single row.

@@ -1,0 +1,19 @@
+--- projects/menu/src/settings/SteamGridDbPickerScreen.cpp
++++ projects/menu/src/settings/SteamGridDbPickerScreen.cpp
+@@ -540,14 +566,14 @@ void SteamGridDbPickerScreen::activateSelection() {
+         if (m_selected < 0 || m_selected >= count) return;
+         const GameMatch match = m_gameMatches[(size_t)m_selected];
+         m_loading = true;
+-        m_message = "Loading artwork for " + match.name + "...";
++        m_message = fillPlaceholders(pickerText("sgdb_picker.loading_for", "Loading artwork for {}..."), {match.name});
+         if (m_pickGameCb) m_pickGameCb(m_result, match);
+         return;
+     }
+     const int count = artworkCount();
+     if (m_selected < 0 || m_selected >= count) return;
+     m_loading = true;
+-    m_message = "Applying selection...";
++    m_message = pickerText("sgdb_picker.applying", "Applying selection...");
+     if (m_applyCb) m_applyCb(m_result, m_result.candidates[(size_t)m_selected]);
+ }
+ 

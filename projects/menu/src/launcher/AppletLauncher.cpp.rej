@@ -1,0 +1,23 @@
+--- projects/menu/src/launcher/AppletLauncher.cpp
++++ projects/menu/src/launcher/AppletLauncher.cpp
+@@ -145,11 +153,17 @@ void AppletLauncher::resumeApplication() {
+         DebugLog::log("[launcher] no app suspended!");
+         return;
+     }
+-    switchu::FileLog::logCommit("[launcher] resume: sending command");
++    // The leave frame must be on the SD card before the menu goes away, but
++    // nothing else needs a synchronous SD commit here: plain log lines keep
++    // the resume hand-off fast.
++    beforeHandoff();
++    switchu::FileLog::log("[launcher] resume: sending command");
+     const Result rc = switchu::menu::smi_cmd::resumeApplication();
+-    switchu::FileLog::logCommit("[launcher] resume: command returned 0x%X", rc);
++    if (R_FAILED(rc))
++        switchu::FileLog::logCommit("[launcher] resume: command FAIL 0x%X", rc);
++    else
++        switchu::FileLog::log("[launcher] resume: command returned 0x%X", rc);
+     if (m_cb.requestExit) m_cb.requestExit();
+-    switchu::FileLog::logCommit("[launcher] resume: exit requested");
+ }
+ 
+ void AppletLauncher::terminateApplication() {

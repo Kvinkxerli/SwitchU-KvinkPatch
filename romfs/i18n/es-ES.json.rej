@@ -1,0 +1,12 @@
+--- romfs/i18n/es-ES.json
++++ romfs/i18n/es-ES.json
+@@ -649,7 +673,8 @@
+     "layout": {
+       "grid": "Modo cuadrícula",
+       "dynamic_line": "Modo línea dinámica"
+-    }
++    },
++    "dialog_hints": "Izquierda y derecha para cambiar. A para confirmar. B para cancelar."
+   },
+   "tutorial": {
+     "accessibility": {

@@ -1,0 +1,19 @@
+--- projects/menu/src/widgets/QuickSettingsOverlay.cpp
++++ projects/menu/src/widgets/QuickSettingsOverlay.cpp
+@@ -3219,8 +3236,15 @@ void QuickSettingsOverlay::render(nxui::Renderer& ren) {
+             nxui::Vec2 lsz = m_smallFont->measure(label);
+             nxui::Color textColor = focused ? primaryText : secondaryText;
+             // Shared metrics so Sleep / Reboot / Power Off read as one family.
+-            const float textScale = kPowerTextScale;
+             const float iconGap = kPowerIconGap;
++            // Longer localized labels (e.g. "Перезагрузить") must stay inside
++            // the button: shrink the text just enough to fit.
++            const float padX = 10.f;
++            const float iconReserve = (pa == PowerAction::Sleep) ? 18.f : 22.f;
++            float textScale = kPowerTextScale;
++            const float availW = btn.width - padX * 2.f - iconReserve - iconGap;
++            if (lsz.x * textScale > availW && lsz.x > 0.f)
++                textScale = std::max(0.45f, availW / lsz.x);
+ 
+             if (pa == PowerAction::Sleep) {
+                 const float iconSlot = 18.f;

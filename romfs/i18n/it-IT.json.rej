@@ -1,0 +1,12 @@
+--- romfs/i18n/it-IT.json
++++ romfs/i18n/it-IT.json
+@@ -470,7 +473,8 @@
+     "grid": {
+       "empty_slot": "Casella vuota"
+     },
+-    "user_profile": "Profilo utente"
++    "user_profile": "Profilo utente",
++    "dialog_hints": "Sinistra e destra per cambiare. A per confermare. B per annullare."
+   },
+   "tutorial": {
+     "accessibility": {

@@ -1,0 +1,11 @@
+--- projects/menu/src/settings/FolderOptionsScreen.cpp
++++ projects/menu/src/settings/FolderOptionsScreen.cpp
+@@ -12,7 +13,7 @@ std::string ellipsize(nxui::Font* font, std::string text, float maxWidth) {
+     if (!font || font->measure(text).x <= maxWidth)
+         return text;
+     while (!text.empty()) {
+-        text.pop_back();
++        nxui::popUtf8Codepoint(text);
+         if (font->measure(text + "...").x <= maxWidth)
+             return text + "...";
+     }
