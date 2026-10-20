@@ -107,7 +107,6 @@ bool readDevicePowerInfo(HidNpadIdType id, u64 wantRight, s16& outLevel, bool& o
     outCharging = info.is_charging != false && info.is_powered != false;
     return true;
 }
-} // namespace
 
 // Styles whose devices report no battery at all (wired GC, Poké Ball Plus,
 // virtual/debug pads).
