@@ -58,8 +58,9 @@ std::string styleName(u32 style) {
 void ControllerTestScreen::showManager() {
     if (m_active)
         return;
-    show();
+    show();                 // base activation: animations, visibility, sfx hooks
     m_mode = Mode::Manager;
+    clearActions();         // the Test-mode X action must not leak into Manager
     m_managerSel = 0;
     m_status.clear();
     m_statusTime = 0.f;
@@ -69,81 +70,44 @@ void ControllerTestScreen::showManager() {
             "Controllers. Up and Down select a player, Y swaps with the next player, X changes grip, Plus pairs a new controller, Minus tests input, B closes."));
 }
 
-// Battery state comes from hidd's GetDevicePowerInfo service command. The
-// installed libnx may not export thin wrappers for it, so we talk to the
-// already-open HID session ourselves. Layout matches the official switchbrew
-// "HID Device Power Info" documentation:
-//   in[0] = VirtualKey pad id, in[1] = AppletResourceManager uid (0),
-//   in[2..3] = device properties (0 -> main device,
-//            0x1000000080000000 -> left Joy-Con half,
-//            0x2000000080000000 -> right Joy-Con half).
-// Out buffer: u8 charge level (0..4, 0xFF = unavailable), u8 charger type
-// (0 = not charging).
-// There is no percentage syscall in hid: the system UI itself only ever shows
-// these five levels, so we keep the raw 0..4 value and render it as bars.
+// Battery state comes straight from libnx's public HID API - no raw IPC, no
+// private symbols (verified against switchbrew/libnx master hid.h):
+//   u32  hidGetNpadStyleSet(HidNpadIdType id)        -> connection/style bits
+//   void hidGetNpadPowerInfoSingle(id, HidPowerInfo*)      -> main device
+//   void hidGetNpadPowerInfoSplit(id, left, right)         -> Joy-Con pair
+// HidPowerInfo { bool is_powered; bool is_charging; u8 pad[6];
+//                u32 battery_level /* always 0-4 */ }.
+// When a pad has no battery data hidd leaves battery_level at its default and
+// is_powered false; we treat "no power info" as valid=false only when the
+// style itself can report batteries but the level is out of range.
 namespace {
 constexpr float kBatteryPollInterval = 0.5f;
 
-constexpr u64 kPropLeftJoyCon  = 0x1000000080000000ULL;
-constexpr u64 kPropRightJoyCon = 0x2000000080000000ULL;
-
-// libnx keeps the HID session handle private (static HidService g_hidSrv in
-// hid.c). Fetch it once through a public wrapper: every applet-style session
-// supports GetSharedMemory (cmd 10) which returns an inactive handle we can
-// close immediately - we only need the pointer stored inside the service.
-bool initHidSessionHandle() {
-    static bool ready = [] {
-        Result rc = hidGetSharedMemoryAddressOffset(nullptr); // ensures hid is init'd
-        (void)rc;
-        return R_SUCCEEDED(hidInitializeGameplayRecorder());
-    }();
-    return ready;
-}
-
-// Minimal accessor for libnx's private session. If this ever fails to build
-// against a newer libnx, fall back to `extern "C" Service* hidGetServiceHandle()`
-// should one get exported upstream.
-extern "C" {
-__attribute__((weak)) extern Service* switchu_hid_service_ptr;
-}
-
-static inline Service* hidSession() {
-    // libnx >= 4.9 exposes the handle via this helper macro pattern; if the
-    // symbol below is missing at link time the weak fallback keeps us alive
-    // and battery display degrades to "no data" instead of crashing.
-    return switchu_hid_service_ptr;
-}
-
-bool readDevicePowerInfo(HidNpadIdType id, u64 props, s16& outLevel, bool& outCharging) {
+// prop = 0 -> single/main device of the pad; nonzero -> left/right halves of
+// a detached Joy-Con pair via hidGetNpadPowerInfoSplit. Returns false when
+// the reported level is out of the documented 0..4 range.
+bool readDevicePowerInfo(HidNpadIdType id, u64 wantRight, s16& outLevel, bool& outCharging) {
     outLevel = -1;
     outCharging = false;
-    // Raw IPC buffer layout (matches libnx's internal HidDevicePowerInfoIpc):
-    // 0x0: in[0] pad id, 0x8: in[1] aruid, 0x10/0x14: in[2..3] device props,
-    // 0x18: raw-args size, 0x20: out descriptor {buffer ptr, size},
-    // 0x30: recv static buffers size. Reply payload starts at 0x40.
-    alignas(16) u8 buf[0x80] = {};
-    auto wr64 = [&](size_t off, u64 v) { std::memcpy(buf + off, &v, sizeof(v)); };
-    wr64(0x00, static_cast<u64>(id));
-    wr64(0x08, 0ULL);                       // AppletResourceManager uid
-    wr64(0x10, props >> 32);                // device properties, high word
-    wr64(0x18, 0ULL);                       // device properties, low word
-    wr64(0x20, 0x8ULL << 16 | 0x2U);        // in-args raw size = 8 bytes
-    wr64(0x28, 0ULL);                       // no send buffers
-    wr64(0x30, reinterpret_cast<u64>(buf + 0x40) | 0x8ULL << 48); // out descriptor
-    wr64(0x38, 0ULL);                       // no exchange flags
-
-    Result rc = svcSendSyncRequest(hidGetServiceHandle());
-    if (R_FAILED(rc))
+    if (wantRight == 0ULL) {
+        HidPowerInfo info{};
+        hidGetNpadPowerInfoSingle(id, &info);
+        if (info.battery_level > 4u)
+            return false;
+        outLevel = static_cast<s16>(info.battery_level);
+        outCharging = info.is_charging != false && info.is_powered != false;
+        return true;
+    }
+    HidPowerInfo left{}, right{};
+    hidGetNpadPowerInfoSplit(id, &left, &right);
+    const HidPowerInfo& info = (wantRight == 2ULL) ? right : left;
+    if (info.battery_level > 4u)
         return false;
-
-    const u8 level = buf[0x40];
-    const u8 charger = buf[0x41];
-    if (level == 0xFF)
-        return false; // device connected but reports no battery data
-    outLevel = static_cast<s16>(level > 4u ? 4u : level);
-    outCharging = charger != 0;
+    outLevel = static_cast<s16>(info.battery_level);
+    outCharging = info.is_charging != false && info.is_powered != false;
     return true;
 }
+} // namespace
 
 // Styles whose devices report no battery at all (wired GC, Poké Ball Plus,
 // virtual/debug pads).
@@ -183,7 +147,7 @@ void ControllerTestScreen::pollBatteries() {
             // Show both halves separately for a detached Joy-Con pair.
             s16 rlevel = -1;
             bool rcharging = false;
-            const bool rok = readDevicePowerInfo(id, kPropRightJoyCon, rlevel, rcharging);
+            const bool rok = readDevicePowerInfo(id, 2ULL, rlevel, rcharging);
             applyInfo(9, rok ? rlevel : -1, rok && rcharging, rok);
             m_batteryType[9] = static_cast<u8>(HidNpadStyleTag_NpadJoyRight);
         } else if (i == 0) {

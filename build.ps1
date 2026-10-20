@@ -238,10 +238,31 @@ try {
     # The eSpeak NG data step runs CMake with the *host* compiler. If this
     # shell was launched from an MSYS2/devkitA64 environment, CC/CXX point at
     # aarch64-none-elf-g++ and CMake fails with "CMAKE_C_COMPILER not set".
-    # Clear them so CMake auto-detects MSVC/MinGW; xmake.lua also passes
-    # -DCMAKE_C(XX)_COMPILER= empty overrides as a second line of defence.
+    # Clear them so CMake auto-detects MSVC/MinGW; xmake.lua also probes for
+    # gcc/g++/ninja explicitly as a second line of defence.
     Remove-Item Env:CC  -ErrorAction SilentlyContinue
     Remove-Item Env:CXX -ErrorAction SilentlyContinue
+
+    # Prefer Ninja (fastest, no VS/nmake dependency) for the eSpeak NG data
+    # build; fall back to whatever CMake can find on its own.
+    $ninjaCandidates = @()
+    if ($msysBin) { $ninjaCandidates += (Join-Path $msysBin 'ninja.exe') }
+    $ninjaCandidates += @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\ninja\ninja.exe'),
+        'C:\ninja\ninja.exe'
+    )
+    $ninjaExe = $ninjaCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $ninjaExe) {
+        try { $ninjaExe = Find-Tool 'ninja' @() $null } catch { $ninjaExe = $null }
+    }
+    if ($ninjaExe) {
+        Add-ToolPath (Split-Path $ninjaExe -Parent)
+        Write-Host "ninja found: $ninjaExe" -ForegroundColor DarkGray
+    } else {
+        Write-Warning ('Ninja not found - CMake will fall back to nmake/Visual Studio ' +
+                       'for the eSpeak NG data step. If that fails, install ninja ' +
+                       '(winget install Ninja-build.Ninja).')
+    }
 
     # --- Submodules ---------------------------------------------------------
     $missing = @('lib\espeak-ng', 'lib\Atmosphere-libs') |
