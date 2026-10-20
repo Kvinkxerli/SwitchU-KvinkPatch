@@ -224,8 +224,9 @@ target("SwitchU")
         local build_dir = path.join(os.projectdir(), "build/espeak-ng-native")
         local data_dir = path.join(build_dir, "espeak-ng-data")
 
-        if not os.isdir(source_dir) then
-            raise("eSpeak NG submodule is missing: " .. source_dir)
+        if not os.isdir(path.join(source_dir, "CMakeLists.txt")) then
+            raise("eSpeak NG submodule is missing/incomplete: " .. source_dir ..
+                  "\nRun: git submodule update --init --recursive lib/espeak-ng")
         end
 
         import("scripts.stamp")
@@ -237,19 +238,37 @@ target("SwitchU")
             return
         end
 
+        -- The espeak-ng data target must be built with the *host* toolchain.
+        -- When xmake runs under a devkita64 environment (our build.ps1 exports
+        -- CC/CXX pointing at aarch64-none-elf-g++) CMake picks up those vars
+        -- and fails with "CMAKE_C_COMPILER not set". Clear them for this step.
         cprint("${color.build.target}generating${clear} eSpeak NG data")
-        os.vrunv("cmake", {
+        local saved_cc, saved_cxx = os.getenv("CC"), os.getenv("CXX")
+        os.setenv("CC", nil)
+        os.setenv("CXX", nil)
+        local ok, err = os.execv("cmake", {
             "-S", source_dir,
             "-B", build_dir,
+            "--fresh",
+            "-DCMAKE_C_COMPILER=",
+            "-DCMAKE_CXX_COMPILER=",
             "-DENABLE_TESTS=OFF",
             "-DBUILD_SHARED_LIBS=OFF",
             "-DUSE_LIBSONIC=OFF",
             "-DUSE_LIBPCAUDIO=OFF",
-            "-DUSE_MBROLA=OFF",
-            "-DSONIC_LIB=/usr/lib/libm.so",
-            "-DSONIC_INC=/usr/include"
+            "-DUSE_MBROLA=OFF"
         })
-        os.vrunv("cmake", {"--build", build_dir, "--target", "data"})
+        if not ok then
+            os.setenv("CC", saved_cc)
+            os.setenv("CXX", saved_cxx)
+            raise("cmake configure of eSpeak NG failed: " .. tostring(err))
+        end
+        ok, err = os.execv("cmake", {"--build", build_dir, "--target", "data"})
+        os.setenv("CC", saved_cc)
+        os.setenv("CXX", saved_cxx)
+        if not ok then
+            raise("cmake build of eSpeak NG data failed: " .. tostring(err))
+        end
 
         if not os.isfile(path.join(data_dir, "phondata")) or
            not os.isfile(path.join(data_dir, "fr_dict")) then

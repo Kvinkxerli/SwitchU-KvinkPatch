@@ -143,10 +143,9 @@ void configureRequest(curlpp::Easy& request,
         request.setOpt<curlpp::options::HttpHeader>(headers);
     }
     // Let curl negotiate gzip/deflate (it decodes transparently) - catalog
-    // and manifest JSON shrink a lot. Empty string = every encoding built in.
-    // NOTE: this curlpp build has no curlpp::options::AcceptEncoding trait,
-    // so set the raw CURLoption via untyped setOpt instead.
-    request.setOpt(CURLOPT_ACCEPT_ENCODING, "");
+    // and manifest JSON shrink a lot. curlpp 2026.02.12 exposes this option
+    // as options::Encoding (CURLOPT_ACCEPT_ENCODING under the hood).
+    request.setOpt<curlpp::options::Encoding>("");
     request.setOpt<curlpp::options::WriteFunction>(
         [&response](char* ptr, size_t size, size_t nmemb) -> size_t {
             const size_t total = size * nmemb;

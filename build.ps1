@@ -235,6 +235,14 @@ try {
         Add-ToolPath $msysBin
     }
 
+    # The eSpeak NG data step runs CMake with the *host* compiler. If this
+    # shell was launched from an MSYS2/devkitA64 environment, CC/CXX point at
+    # aarch64-none-elf-g++ and CMake fails with "CMAKE_C_COMPILER not set".
+    # Clear them so CMake auto-detects MSVC/MinGW; xmake.lua also passes
+    # -DCMAKE_C(XX)_COMPILER= empty overrides as a second line of defence.
+    Remove-Item Env:CC  -ErrorAction SilentlyContinue
+    Remove-Item Env:CXX -ErrorAction SilentlyContinue
+
     # --- Submodules ---------------------------------------------------------
     $missing = @('lib\espeak-ng', 'lib\Atmosphere-libs') |
         Where-Object { -not (Test-Path (Join-Path $Root "$_\.git")) }
