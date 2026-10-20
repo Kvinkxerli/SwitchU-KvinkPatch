@@ -1,0 +1,609 @@
+#include "SteamGridDbPickerScreen.hpp"
+
+#include "themeshop/ThemeHttp.hpp"
+
+#include <nxui/core/I18n.hpp>
+#include <nxui/core/Input.hpp>
+#include <nxui/core/Renderer.hpp>
+#include <nxui/third_party/stb/stb_image.h>
+
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <initializer_list>
+#include <vector>
+
+namespace {
+
+// Replaces the first "{}" placeholders (in order) with the given values, so
+// translations can reorder words around them.
+std::string fillPlaceholders(std::string text, std::initializer_list<std::string> values) {
+    std::size_t from = 0;
+    for (const auto& value : values) {
+        const std::size_t at = text.find("{}", from);
+        if (at == std::string::npos)
+            break;
+        text.replace(at, 2, value);
+        from = at + value.size();
+    }
+    return text;
+}
+
+inline std::string pickerText(const char* key, const char* fallback) {
+    return nxui::I18n::instance().tr(key, fallback);
+}
+
+constexpr int kColumns = 4;
+constexpr int kRows = 3;
+constexpr int kPerPage = kColumns * kRows;
+constexpr int kGameListVisible = 8;
+constexpr float kContentTop = 236.f;
+
+std::vector<std::string> wrapLines(nxui::Font* font, const std::string& text,
+                                   float maxWidth, float scale) {
+    std::vector<std::string> lines;
+    if (!font || text.empty() || maxWidth <= 1.f) {
+        if (!text.empty()) lines.push_back(text);
+        return lines;
+    }
+
+    std::string word;
+    std::string line;
+    auto flushWord = [&]() {
+        if (word.empty()) return;
+        const std::string candidate = line.empty() ? word : (line + " " + word);
+        if (font->measure(candidate).x * scale <= maxWidth || line.empty()) {
+            line = candidate;
+        } else {
+            lines.push_back(line);
+            line = word;
+        }
+        word.clear();
+    };
+
+    for (char ch : text) {
+        if (ch == '\n') {
+            flushWord();
+            lines.push_back(line);
+            line.clear();
+            continue;
+        }
+        if (ch == ' ' || ch == '\t') {
+            flushWord();
+            continue;
+        }
+        word.push_back(ch);
+    }
+    flushWord();
+    if (!line.empty() || lines.empty())
+        lines.push_back(line);
+    return lines;
+}
+
+bool looksLikeTransportError(const std::string& message) {
+    std::string lower = message;
+    for (char& c : lower)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return lower.find("https failed") != std::string::npos
+        || lower.find("couldn't reach steamgriddb") != std::string::npos
+        || lower.find("console clock") != std::string::npos
+        || lower.find("ssl") != std::string::npos
+        || lower.find("certificate") != std::string::npos;
+}
+}
+
+SteamGridDbPickerScreen::SteamGridDbPickerScreen(nxui::GpuDevice& gpu,
+                                                 nxui::Renderer& renderer,
+                                                 nxui::ThreadPool& threadPool)
+    : m_gpu(gpu), m_renderer(renderer), m_threadPool(threadPool) {
+    setRect({0.f, 0.f, 1280.f, 720.f});
+    setVisible(false);
+    setFocusable(true);
+    setFrameworkTouchEnabled(false);
+
+    auto addDirection = [this](nxui::Button button, int dx, int dy) {
+        addAction(static_cast<std::uint64_t>(button), [this, dx, dy]() {
+            moveSelection(dx, dy);
+        });
+    };
+    addDirection(nxui::Button::DLeft, -1, 0);
+    addDirection(nxui::Button::LStickL, -1, 0);
+    addDirection(nxui::Button::DRight, 1, 0);
+    addDirection(nxui::Button::LStickR, 1, 0);
+    addDirection(nxui::Button::DUp, 0, -1);
+    addDirection(nxui::Button::LStickU, 0, -1);
+    addDirection(nxui::Button::DDown, 0, 1);
+    addDirection(nxui::Button::LStickD, 0, 1);
+    addAction(static_cast<std::uint64_t>(nxui::Button::A), [this]() { activateSelection(); });
+    addAction(static_cast<std::uint64_t>(nxui::Button::X), [this]() {
+        if (m_searchCb) m_searchCb();
+    });
+    addAction(static_cast<std::uint64_t>(nxui::Button::B), [this]() { goBack(); });
+}
+
+void SteamGridDbPickerScreen::showLoading(std::uint64_t titleId,
+                                          const std::string& title,
+                                          const std::string& query,
+                                          SteamGridDbManager::ArtworkKind kind,
+                                          bool preserveGameMatches) {
+    ++m_generation;
+    for (auto& slot : m_slots) {
+        if (slot.state) slot.state->cancelled.store(true);
+        slot.ready = false;
+        slot.failed = false;
+    }
+    // Keep title/query/kind for the loading header; clear candidates so we do
+    // not flash stale artwork while a new search runs.
+    const auto keptMatches = m_gameMatches;
+    m_result = {};
+    m_result.titleId = titleId;
+    m_result.title = title;
+    m_result.query = query;
+    m_result.kind = kind;
+    if (preserveGameMatches && !keptMatches.empty())
+        m_gameMatches = keptMatches;
+    else
+        m_gameMatches.clear();
+    m_selected = 0;
+    m_loading = true;
+    m_pickingGame = false;
+    m_message = pickerText("settings.steamgriddb.download_start", "Searching SteamGridDB...");
+    m_active = true;
+    setVisible(true);
+}
+
+void SteamGridDbPickerScreen::showGameList(const std::vector<GameMatch>& matches) {
+    m_gameMatches = matches;
+    m_pickingGame = true;
+    m_loading = false;
+    m_selected = 0;
+    m_result.candidates.clear();
+    m_result.gameMatches = matches;
+    m_result.success = !matches.empty();
+    m_message = matches.empty()
+        ? pickerText("sgdb_picker.no_games", "No games found")
+        : fillPlaceholders(pickerText("sgdb_picker.games_pick", "{} games — pick one"),
+                           {std::to_string(matches.size())});
+}
+
+void SteamGridDbPickerScreen::setResult(BrowseResult result) {
+    const auto previousMatches = m_gameMatches;
+    m_result = std::move(result);
+    m_loading = false;
+    m_selected = 0;
+    ++m_generation;
+
+    if (m_result.success && !m_result.gameMatches.empty() && m_result.candidates.empty()) {
+        showGameList(m_result.gameMatches);
+        return;
+    }
+
+    if (!m_result.success && !previousMatches.empty() && m_result.candidates.empty()) {
+        // Failed artwork load after a game pick — return to the list with the error.
+        showGameList(previousMatches);
+        m_message = m_result.error.empty()
+            ? nxui::I18n::instance().tr(
+                  "settings.steamgriddb.search_failed",
+                  "Search failed. If HTTPS keeps failing, check the console clock in Settings > System.")
+            : m_result.error;
+        return;
+    }
+
+    m_pickingGame = false;
+    if (!m_result.gameMatches.empty())
+        m_gameMatches = m_result.gameMatches;
+    else if (!previousMatches.empty())
+        m_gameMatches = previousMatches;
+    if (m_result.success) {
+        m_message = fillPlaceholders(pickerText("sgdb_picker.choices_for", "{} choices for {}"),
+                                     {std::to_string(m_result.candidates.size()), m_result.gameName});
+    } else if (m_result.error.empty()) {
+        m_message = nxui::I18n::instance().tr(
+            "settings.steamgriddb.search_failed",
+            "Search failed. If HTTPS keeps failing, check the console clock in Settings > System.");
+    } else {
+        m_message = m_result.error;
+    }
+    schedulePreviews();
+}
+
+void SteamGridDbPickerScreen::setMessage(const std::string& message, bool loading) {
+    m_message = message;
+    m_loading = loading;
+}
+
+void SteamGridDbPickerScreen::hide() {
+    if (!m_active) return;
+    m_active = false;
+    m_pickingGame = false;
+    m_gameMatches.clear();
+    setVisible(false);
+    for (auto& slot : m_slots)
+        if (slot.state) slot.state->cancelled.store(true);
+    if (m_closedCb) m_closedCb();
+}
+
+void SteamGridDbPickerScreen::goBack() {
+    // From artwork gallery after a game pick, return to the ranked game list.
+    if (!m_pickingGame && !m_loading && !m_gameMatches.empty()) {
+        for (auto& slot : m_slots)
+            if (slot.state) slot.state->cancelled.store(true);
+        showGameList(m_gameMatches);
+        return;
+    }
+    hide();
+}
+
+void SteamGridDbPickerScreen::wait() {
+    for (auto& slot : m_slots) {
+        if (slot.state) slot.state->cancelled.store(true);
+        if (slot.future.valid()) slot.future.wait();
+    }
+    for (auto& future : m_retiredFutures)
+        if (future.valid()) future.wait();
+    m_retiredFutures.clear();
+}
+
+SteamGridDbPickerScreen::DecodedImage SteamGridDbPickerScreen::decodePreview(
+    const std::vector<std::uint8_t>& bytes) {
+    DecodedImage out;
+    if (bytes.empty()) return out;
+    int width = 0, height = 0, channels = 0;
+    stbi_uc* raw = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
+                                         &width, &height, &channels, 4);
+    if (!raw || width <= 0 || height <= 0) {
+        if (raw) stbi_image_free(raw);
+        return out;
+    }
+    // Every preview uses the same small canvas. Slots can therefore reuse
+    // their GPU allocation across searches instead of freeing a variable-size
+    // texture (which requires a graphics lifetime synchronisation).
+    out.width = 240;
+    out.height = 112;
+    out.rgba.assign(static_cast<std::size_t>(out.width) * out.height * 4, 0);
+    const float scale = std::min(static_cast<float>(out.width) / width,
+                                 static_cast<float>(out.height) / height);
+    const int drawnWidth = std::max(1, static_cast<int>(width * scale));
+    const int drawnHeight = std::max(1, static_cast<int>(height * scale));
+    const int offsetX = (out.width - drawnWidth) / 2;
+    const int offsetY = (out.height - drawnHeight) / 2;
+    for (int y = 0; y < drawnHeight; ++y) {
+        const int sourceY = y * height / drawnHeight;
+        for (int x = 0; x < drawnWidth; ++x) {
+            const int sourceX = x * width / drawnWidth;
+            std::memcpy(out.rgba.data()
+                            + (static_cast<std::size_t>(y + offsetY) * out.width
+                               + x + offsetX) * 4,
+                        raw + (static_cast<std::size_t>(sourceY) * width + sourceX) * 4,
+                        4);
+        }
+    }
+    stbi_image_free(raw);
+    return out;
+}
+
+void SteamGridDbPickerScreen::schedulePreviews() {
+    const std::size_t count = std::min(m_result.candidates.size(), m_slots.size());
+    for (std::size_t i = 0; i < m_slots.size(); ++i) {
+        auto& slot = m_slots[i];
+        if (slot.state) slot.state->cancelled.store(true);
+        if (slot.future.valid())
+            m_retiredFutures.push_back(std::move(slot.future));
+        slot.state.reset();
+        slot.ready = false;
+        slot.failed = i >= count;
+        if (i >= count) continue;
+        slot.candidate = m_result.candidates[i];
+    }
+}
+
+void SteamGridDbPickerScreen::schedulePreview(std::size_t index) {
+    if (index >= m_slots.size()) return;
+    auto& slot = m_slots[index];
+    if (slot.ready || slot.failed || slot.future.valid() || slot.state) return;
+    slot.generation = m_generation;
+    slot.state = std::make_shared<DecodeState>();
+    auto state = slot.state;
+    const std::string url = slot.candidate.thumbnailUrl.empty()
+        ? slot.candidate.url : slot.candidate.thumbnailUrl;
+    slot.future = m_threadPool.submit([state, url]() {
+        try {
+            if (!state->cancelled.load())
+                state->image = decodePreview(themeshop::http::getBytes(url));
+        } catch (...) {
+        }
+    });
+}
+
+void SteamGridDbPickerScreen::onUpdate(float dt) {
+    if (!m_active) return;
+    m_spinner += dt;
+    if (m_pickingGame) return;
+
+    for (std::size_t i = 0; i < m_retiredFutures.size();) {
+        if (m_retiredFutures[i].wait_for(std::chrono::seconds(0))
+            != std::future_status::ready) {
+            ++i;
+            continue;
+        }
+        try { m_retiredFutures[i].get(); } catch (...) {}
+        m_retiredFutures[i] = std::move(m_retiredFutures.back());
+        m_retiredFutures.pop_back();
+    }
+
+    int uploads = 0;
+    for (auto& slot : m_slots) {
+        if (uploads >= 1 || slot.ready || slot.failed || !slot.future.valid()) continue;
+        if (slot.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+        try { slot.future.get(); } catch (...) {}
+        if (!slot.state || slot.state->cancelled.load() || slot.generation != m_generation) {
+            slot.failed = true;
+            continue;
+        }
+        auto& image = slot.state->image;
+        slot.ready = !image.rgba.empty()
+            && slot.texture.loadFromPixels(m_gpu, m_renderer, image.rgba.data(),
+                                           image.width, image.height);
+        slot.failed = !slot.ready;
+        image.rgba.clear();
+        ++uploads;
+    }
+
+    // Network/decode work is intentionally limited. Launching all eighteen
+    // previews at once saturated the shared worker pool and caused audible
+    // underruns while navigating the gallery.
+    int activeJobs = 0;
+    for (const auto& slot : m_slots)
+        if (slot.future.valid()) ++activeJobs;
+    const int count = artworkCount();
+    const int pageStart = count > 0 ? (m_selected / kPerPage) * kPerPage : 0;
+    for (int offset = 0; offset < kPerPage && activeJobs < 2; ++offset) {
+        const int index = pageStart + offset;
+        if (index >= count) break;
+        auto& slot = m_slots[(size_t)index];
+        if (!slot.ready && !slot.failed && !slot.future.valid() && !slot.state) {
+            schedulePreview((size_t)index);
+            ++activeJobs;
+        }
+    }
+}
+
+nxui::Rect SteamGridDbPickerScreen::containRect(const nxui::Texture& texture,
+                                                const nxui::Rect& area) {
+    if (!texture.valid()) return area;
+    const float scale = std::min(area.width / texture.width(), area.height / texture.height());
+    const float width = texture.width() * scale;
+    const float height = texture.height() * scale;
+    return {area.x + (area.width - width) * 0.5f,
+            area.y + (area.height - height) * 0.5f, width, height};
+}
+
+std::string SteamGridDbPickerScreen::kindLabel() const {
+    return m_result.kind == SteamGridDbManager::ArtworkKind::Hero
+               ? pickerText("game.steamgriddb.hero", "Hero")
+         : m_result.kind == SteamGridDbManager::ArtworkKind::Logo
+               ? pickerText("game.steamgriddb.logo", "Logo")
+               : pickerText("sgdb_picker.kind_icon", "Icon");
+}
+
+int SteamGridDbPickerScreen::gameListCount() const {
+    return static_cast<int>(m_gameMatches.size());
+}
+
+int SteamGridDbPickerScreen::artworkCount() const {
+    return static_cast<int>(std::min(m_result.candidates.size(), m_slots.size()));
+}
+
+void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
+    if (!m_active || !m_theme) return;
+    renderer.drawRect(rect(), nxui::Color(0.f, 0.f, 0.f, 0.62f));
+    const nxui::Rect panel{70.f, 38.f, 1140.f, 644.f};
+    renderer.drawRoundedRect(panel, m_theme->panelBase.withAlpha(0.98f), 28.f);
+    renderer.drawRoundedRectOutline(panel, m_theme->panelBorder.withAlpha(0.45f), 28.f, 1.5f);
+
+    nxui::Font* titleFont = m_font ? m_font : m_smallFont;
+    nxui::Font* bodyFont = m_smallFont ? m_smallFont : m_font;
+    if (titleFont) {
+        renderer.drawText("SteamGridDB - " + kindLabel(), {108.f, 62.f}, titleFont,
+                          m_theme->textPrimary, 1.f);
+        if (!m_result.title.empty())
+            renderer.drawText(m_result.title, {108.f, 104.f}, titleFont,
+                              m_theme->textSecondary, 0.82f);
+    }
+    if (bodyFont) {
+        // Keep search controls at near-native small-font size (old 0.72 scale
+        // made the query / Change name row almost unreadable on TV).
+        const std::string searchLine = pickerText("sgdb_picker.search", "Search") + "  " + m_result.query;
+        renderer.drawText(searchLine, {108.f, 148.f}, bodyFont,
+                          m_theme->textPrimary, 1.f);
+        const float searchW = bodyFont->measure(searchLine).x;
+        renderer.drawText(pickerText("sgdb_picker.change_name", "X  Change name"), {108.f + searchW + 28.f, 148.f}, bodyFont,
+                          m_theme->cursorNormal, 1.f);
+    }
+
+    const bool showStatusPanel = !m_loading && !m_pickingGame && !m_result.success
+        && m_result.candidates.empty() && m_gameMatches.empty() && !m_message.empty();
+    if (!showStatusPanel && bodyFont && !m_message.empty() && !m_loading) {
+        renderer.drawText(m_message, {108.f, 188.f}, bodyFont,
+                          m_theme->textSecondary, 0.95f);
+    }
+
+    if (m_loading) {
+        const float pulse = 0.45f + 0.35f * std::sin(m_spinner * 5.f);
+        renderer.drawRoundedRect({570.f, 340.f, 140.f, 12.f},
+                                 m_theme->cursorNormal.withAlpha(pulse), 6.f);
+        if (bodyFont && !m_message.empty())
+            renderer.drawText(m_message, {108.f, 188.f}, bodyFont,
+                              m_theme->textSecondary, 0.95f);
+        return;
+    }
+
+    if (showStatusPanel) {
+        const nxui::Rect status{170.f, 250.f, 940.f, 300.f};
+        const bool transport = looksLikeTransportError(m_message);
+        const nxui::Color fill = transport
+            ? nxui::Color(0.42f, 0.18f, 0.14f, 0.55f)
+            : m_theme->panelBorder.withAlpha(0.28f);
+        const nxui::Color outline = transport
+            ? nxui::Color(0.92f, 0.55f, 0.42f, 0.70f)
+            : m_theme->panelBorder.withAlpha(0.45f);
+        renderer.drawRoundedRect(status, fill, 22.f);
+        renderer.drawRoundedRectOutline(status, outline, 22.f, 2.f);
+
+        const std::string headline = transport
+            ? nxui::I18n::instance().tr("settings.steamgriddb.https_clock_title",
+                                        "Couldn't reach SteamGridDB")
+            : pickerText("sgdb_picker.search_failed_title", "Search failed");
+        float textY = status.y + 36.f;
+        if (titleFont) {
+            renderer.drawText(headline, {status.x + 40.f, textY}, titleFont,
+                              m_theme->textPrimary, 0.95f);
+            textY += 52.f;
+        }
+        if (bodyFont) {
+            const auto lines = wrapLines(bodyFont, m_message, status.width - 80.f, 1.05f);
+            for (const auto& line : lines) {
+                renderer.drawText(line, {status.x + 40.f, textY}, bodyFont,
+                                  m_theme->textPrimary, 1.05f);
+                textY += 34.f;
+            }
+            renderer.drawText(pickerText("sgdb_picker.hint_error", "B Back   X Try another search"),
+                              {status.x + 40.f, status.y + status.height - 48.f},
+                              bodyFont, m_theme->textSecondary, 0.95f);
+        }
+        return;
+    }
+
+    if (m_pickingGame) {
+        const int count = gameListCount();
+        const int windowStart = std::max(0, std::min(m_selected - kGameListVisible / 2,
+                                                     std::max(0, count - kGameListVisible)));
+        constexpr float rowH = 52.f;
+        constexpr float rowGap = 8.f;
+        for (int local = 0; local < kGameListVisible; ++local) {
+            const int index = windowStart + local;
+            const nxui::Rect row{105.f, kContentTop + local * (rowH + rowGap), 1070.f, rowH};
+            m_visibleRects[(size_t)local] = row;
+            if (index >= count) continue;
+            const bool focused = index == m_selected;
+            renderer.drawRoundedRect(row,
+                m_theme->panelBorder.withAlpha(focused ? 0.34f : 0.18f), 14.f);
+            if (focused)
+                renderer.drawRoundedRectOutline(row.expanded(3.f), m_theme->cursorNormal,
+                                                16.f, 3.5f);
+            if (bodyFont) {
+                const auto& match = m_gameMatches[(size_t)index];
+                renderer.drawText(match.name, {128.f, row.y + 14.f}, bodyFont,
+                                  m_theme->textPrimary, 1.f);
+            }
+        }
+        if (bodyFont && count > 0) {
+            renderer.drawText(pickerText("sgdb_picker.hint_games", "A Choose game   B Back   X Search"),
+                              {108.f, 651.f}, bodyFont, m_theme->textSecondary, 0.95f);
+        }
+        return;
+    }
+
+    const int count = artworkCount();
+    const int page = count > 0 ? m_selected / kPerPage : 0;
+    const int start = page * kPerPage;
+    constexpr float cardW = 250.f;
+    constexpr float cardH = 130.f;
+    constexpr float gapX = 20.f;
+    constexpr float gapY = 18.f;
+    for (int local = 0; local < kPerPage; ++local) {
+        const int index = start + local;
+        const nxui::Rect card{105.f + (local % kColumns) * (cardW + gapX),
+                              kContentTop + (local / kColumns) * (cardH + gapY), cardW, cardH};
+        m_visibleRects[(size_t)local] = card;
+        if (index >= count) continue;
+        renderer.drawRoundedRect(card, m_theme->panelBorder.withAlpha(0.22f), 16.f);
+        const auto& slot = m_slots[(size_t)index];
+        if (slot.ready && slot.texture.valid()) {
+            const nxui::Rect imageArea = card.shrunk(8.f);
+            renderer.drawTexture(&slot.texture, containRect(slot.texture, imageArea),
+                                 nxui::Color::white());
+        } else {
+            renderer.drawRoundedRect(card.shrunk(12.f),
+                                     m_theme->panelHighlight.withAlpha(0.10f), 12.f);
+        }
+        if (index == m_selected)
+            renderer.drawRoundedRectOutline(card.expanded(4.f), m_theme->cursorNormal,
+                                            19.f, 4.f);
+    }
+    if (bodyFont && count > 0) {
+        const int pages = (count + kPerPage - 1) / kPerPage;
+        const std::string artHint = m_gameMatches.empty()
+            ? pickerText("sgdb_picker.hint_art_back", "A Apply   B Back   X Search   Page {}/{}")
+            : pickerText("sgdb_picker.hint_art_games", "A Apply   B Games   X Search   Page {}/{}");
+        renderer.drawText(fillPlaceholders(artHint, {std::to_string(page + 1), std::to_string(pages)}),
+                          {108.f, 651.f}, bodyFont, m_theme->textSecondary, 0.95f);
+    }
+}
+
+void SteamGridDbPickerScreen::moveSelection(int dx, int dy) {
+    if (m_loading) return;
+    if (m_pickingGame) {
+        const int count = gameListCount();
+        if (count <= 0) return;
+        int target = m_selected + dy;
+        if (dx != 0) target = m_selected + dx;
+        if (target >= 0 && target < count) m_selected = target;
+        return;
+    }
+    const int count = artworkCount();
+    if (count <= 0) return;
+    int target = m_selected + dx + dy * kColumns;
+    if (target >= 0 && target < count) m_selected = target;
+}
+
+void SteamGridDbPickerScreen::activateSelection() {
+    if (m_loading) return;
+    if (m_pickingGame) {
+        const int count = gameListCount();
+        if (m_selected < 0 || m_selected >= count) return;
+        const GameMatch match = m_gameMatches[(size_t)m_selected];
+        m_loading = true;
+        m_message = fillPlaceholders(pickerText("sgdb_picker.loading_for", "Loading artwork for {}..."), {match.name});
+        if (m_pickGameCb) m_pickGameCb(m_result, match);
+        return;
+    }
+    const int count = artworkCount();
+    if (m_selected < 0 || m_selected >= count) return;
+    m_loading = true;
+    m_message = pickerText("sgdb_picker.applying", "Applying selection...");
+    if (m_applyCb) m_applyCb(m_result, m_result.candidates[(size_t)m_selected]);
+}
+
+void SteamGridDbPickerScreen::handleTouch(nxui::Input& input) {
+    if (!m_active || m_loading || !input.touchUp()) return;
+
+    if (m_pickingGame) {
+        const int count = gameListCount();
+        const int windowStart = std::max(0, std::min(m_selected - kGameListVisible / 2,
+                                                     std::max(0, count - kGameListVisible)));
+        for (int local = 0; local < kGameListVisible; ++local) {
+            const int index = windowStart + local;
+            if (index >= count
+                || !m_visibleRects[(size_t)local].contains(input.touchX(), input.touchY()))
+                continue;
+            if (m_selected == index) activateSelection();
+            else m_selected = index;
+            return;
+        }
+        return;
+    }
+
+    const int count = artworkCount();
+    const int page = count > 0 ? m_selected / kPerPage : 0;
+    for (int local = 0; local < kPerPage; ++local) {
+        const int index = page * kPerPage + local;
+        if (index >= count || !m_visibleRects[(size_t)local].contains(input.touchX(), input.touchY()))
+            continue;
+        if (m_selected == index) activateSelection();
+        else m_selected = index;
+        return;
+    }
+}

@@ -1,0 +1,3822 @@
+diff --git a/.github/workflows/switch.yml b/.github/workflows/switch.yml
+index 9e30b5d..1ab680a 100644
+--- a/.github/workflows/switch.yml
++++ b/.github/workflows/switch.yml
+@@ -40,6 +40,15 @@ jobs:
+         with:
+           submodules: recursive
+ 
++      - name: Cache libstratosphere
++        uses: actions/cache@v4
++        with:
++          path: |
++            lib/Atmosphere-libs/libstratosphere/lib
++            lib/Atmosphere-libs/libstratosphere/build
++            build/.stamps
++          key: libstratosphere-${{ hashFiles('.gitmodules', 'xmake.lua') }}-${{ hashFiles('lib/Atmosphere-libs/libstratosphere/source/**') }}
++
+       - name: Install system dependencies
+         shell: bash
+         run: |
+diff --git a/lib/nxui/include/nxui/core/GpuDevice.hpp b/lib/nxui/include/nxui/core/GpuDevice.hpp
+index 9e94a43..aafe27f 100644
+--- a/lib/nxui/include/nxui/core/GpuDevice.hpp
++++ b/lib/nxui/include/nxui/core/GpuDevice.hpp
+@@ -74,6 +74,12 @@ public:
+     void endFrame();
+     void waitIdle();
+ 
++    /// Rebuild the deko3d swapchain after a console sleep. The vi layer's
++    /// buffer queue goes stale across sleep and PresentQueue::acquireImage()
++    /// blocks forever; dropping and re-creating the swapchain re-establishes it
++    /// so the first frame after wake can be presented again.
++    void recreateSwapchain();
++
+     /// Copy the most recently presented framebuffer into tightly-packed RGBA8.
+     /// When halfRes is true, downsamples to FB_WIDTH/2 x FB_HEIGHT/2 via the
+     /// existing offscreen target. Must be called outside beginFrame/endFrame
+diff --git a/lib/nxui/include/nxui/core/Input.hpp b/lib/nxui/include/nxui/core/Input.hpp
+index 45ee8b1..1376cb1 100644
+--- a/lib/nxui/include/nxui/core/Input.hpp
++++ b/lib/nxui/include/nxui/core/Input.hpp
+@@ -59,50 +59,21 @@ public:
+     float touchDeltaY()  const { return m_touchY - m_touchStartY; }
+     float touchDuration() const;  // seconds since touch began (valid on touchUp)
+ 
+-    bool  virtualPointerEnabled() const { return m_virtualPointerEnabled; }
+     bool  hasUserActivity() const;
+-    float virtualPointerX() const { return m_virtualPointerX; }
+-    float virtualPointerY() const { return m_virtualPointerY; }
+-    float virtualPointerSensitivity() const { return m_virtualPointerSensitivity; }
+-    void  setVirtualPointerSensitivity(float sensitivity) { m_virtualPointerSensitivity = sensitivity; }
+-    void  setVirtualPointerShortcutsEnabled(bool enabled);
+-    bool  virtualPointerShortcutsEnabled() const { return m_virtualPointerShortcutsEnabled; }
+-    bool  pointerConsumesButton(Button b) const {
+-        return b == Button::A && m_virtualPointerEnabled;
+-    }
+ 
+ private:
+-    void recenterVirtualPointer();
+-    void startVirtualPointerSensors();
+-    void stopVirtualPointerSensors();
+-    void setVirtualPointerEnabled(bool enabled);
+-    bool readActiveSixAxisState(HidSixAxisSensorState& out) const;
+-
+     PadState m_pad{};
+-    HidSixAxisSensorHandle m_handheldSixAxisHandle{};
+-    HidSixAxisSensorHandle m_fullKeySixAxisHandle{};
+-    HidSixAxisSensorHandle m_joyDualSixAxisHandles[2]{};
+     uint64_t m_kDown = 0;
+     uint64_t m_kUp   = 0;
+     uint64_t m_kHeld = 0;
+     float m_lx = 0, m_ly = 0;
+     float m_rx = 0, m_ry = 0;
+-    bool  m_hasHandheldSixAxis = false;
+-    bool  m_hasFullKeySixAxis  = false;
+-    bool  m_hasJoyDualSixAxis  = false;
+-    bool  m_sixAxisRunning = false;
+-    bool  m_virtualPointerEnabled = false;
+-    bool  m_virtualPointerShortcutsEnabled = true;
+-    float m_virtualPointerX = 640.f;
+-    float m_virtualPointerY = 360.f;
+-    float m_virtualPointerSensitivity = 7000.f;
+     bool  m_touching    = false;
+     bool  m_wasTouching = false;
+     bool  m_touchDown   = false;
+     bool  m_touchUp     = false;
+     float m_touchX = 0, m_touchY = 0;
+     float m_touchStartX = 0, m_touchStartY = 0;
+-    uint64_t m_prevUpdateTick = 0;
+     uint64_t m_touchStartTick = 0;
+ };
+ 
+diff --git a/lib/nxui/include/nxui/core/Texture.hpp b/lib/nxui/include/nxui/core/Texture.hpp
+index c99703f..2782dd6 100644
+--- a/lib/nxui/include/nxui/core/Texture.hpp
++++ b/lib/nxui/include/nxui/core/Texture.hpp
+@@ -5,6 +5,7 @@
+ #include <deko3d.hpp>
+ #endif
+ #include <string>
++#include <vector>
+ #include <memory>
+ 
+ struct SDL_Texture;
+@@ -46,6 +47,12 @@ public:
+     bool loadFromMemory(GpuDevice& gpu, Renderer& ren,
+                         const uint8_t* data, size_t dataSize, int maxSide = 0);
+ 
++    // CPU-only decode (+ optional downscale to maxSide) into tightly packed
++    // RGBA8. Thread-safe: lets workers do the expensive part so the render
++    // thread only has to call loadFromPixels().
++    static bool decodeToRgba(const uint8_t* data, size_t dataSize, int maxSide,
++                             std::vector<uint8_t>& outRgba, int& outW, int& outH);
++
+     // Load from SDL_Surface-style data (RGBA8, row pitch may differ)
+     bool loadFromSurface(GpuDevice& gpu, Renderer& ren,
+                          const uint8_t* data, int w, int h, int pitch);
+diff --git a/lib/nxui/include/nxui/core/Utf8.hpp b/lib/nxui/include/nxui/core/Utf8.hpp
+new file mode 100644
+index 0000000..6feb6ad
+--- /dev/null
++++ b/lib/nxui/include/nxui/core/Utf8.hpp
+@@ -0,0 +1,20 @@
++#pragma once
++
++#include <string>
++
++namespace nxui {
++
++// Removes the last Unicode code point (not just the last byte) from a UTF-8
++// string. Truncating text with a plain pop_back() leaves half of a multi-byte
++// character behind, which renders as a broken glyph for Cyrillic, accents,
++// CJK and so on.
++inline void popUtf8Codepoint(std::string& s) {
++    while (!s.empty()) {
++        const unsigned char c = static_cast<unsigned char>(s.back());
++        s.pop_back();
++        if ((c & 0xC0) != 0x80)
++            break;
++    }
++}
++
++} // namespace nxui
+diff --git a/lib/nxui/src/core/Application.cpp b/lib/nxui/src/core/Application.cpp
+index 8dd2d4a..7e20eb6 100644
+--- a/lib/nxui/src/core/Application.cpp
++++ b/lib/nxui/src/core/Application.cpp
+@@ -194,17 +194,14 @@ void Application::dispatchInput() {
+     // Dispatch non-D-pad actions with parent bubbling.
+     // Exclude D-pad buttons so they aren't fired a second time.
+     constexpr uint64_t kA = static_cast<uint64_t>(Button::A);
+-    bool pointerConsumesA = m_input.pointerConsumesButton(Button::A);
+     uint64_t actionExcludeMask = kNavMask;
+-    if (pointerConsumesA)
+-        actionExcludeMask |= kA;
+ 
+     uint64_t consumed = fm.dispatchActions(m_input, actionExcludeMask);
+ 
+     // Auto-activate with A.
+     // If the focused widget didn't register an explicit addAction(A, ...),
+     // fall through to the legacy activate() / setOnActivate() mechanism.
+-    if (!pointerConsumesA && !(consumed & kA) && m_input.isDown(Button::A)) {
++    if (!(consumed & kA) && m_input.isDown(Button::A)) {
+         if (auto* w = fm.current())
+             w->activate();
+     }
+diff --git a/lib/nxui/src/core/GpuDevice.cpp b/lib/nxui/src/core/GpuDevice.cpp
+index 7fed784..a404b4d 100644
+--- a/lib/nxui/src/core/GpuDevice.cpp
++++ b/lib/nxui/src/core/GpuDevice.cpp
+@@ -266,6 +266,40 @@ void GpuDevice::waitIdle() {
+     if (m_queue) m_queue.waitIdle();
+ }
+ 
++void GpuDevice::recreateSwapchain() {
++#ifdef NXUI_BACKEND_DEKO3D
++    if (!m_dev || !m_queue)
++        return;
++
++    // The vi layer/swapchain goes stale across a console sleep: after wake,
++    // PresentQueue::acquireImage() blocks forever and the menu freezes on the
++    // last presented frame. Wait for in-flight commands, drop the old swapchain
++    // so vi releases its buffers, then rebuild it against the current default
++    // window.
++    m_queue.waitIdle();
++
++    m_swapchain = {};
++
++    std::array<DkImage const*, NUM_FB> fbArray;
++    for (int i = 0; i < NUM_FB; ++i)
++        fbArray[i] = &m_fbImages[i];
++    m_swapchain = dk::SwapchainMaker{m_dev, nwindowGetDefault(), fbArray}.create();
++
++    // Immediately present the pre-sleep framebuffer so the vi layer never
++    // flashes black/garbage during the wake transition. The framebuffers still
++    // hold the last frame rendered before sleep, so the screen stays seamless.
++    if (m_swapchain) {
++        const int slot = m_queue.acquireImage(m_swapchain);
++        if (slot >= 0)
++            m_queue.presentImage(m_swapchain, slot);
++    }
++
++    // Force the next beginFrame() to re-acquire a slot from the fresh swapchain.
++    m_slot = -1;
++    logGpu("[GpuDevice] swapchain re-created after sleep (valid=%d)", (bool)m_swapchain);
++#endif
++}
++
+ dk::UniqueMemBlock GpuDevice::allocImageMemory(uint32_t size) {
+     size = (size + kGpuAlign - 1) & ~(kGpuAlign - 1);
+     if (m_imageMemUsed + size > kDefaultImageBudget) {
+diff --git a/lib/nxui/src/core/Input.cpp b/lib/nxui/src/core/Input.cpp
+index 8d8d4e9..a79fed9 100644
+--- a/lib/nxui/src/core/Input.cpp
++++ b/lib/nxui/src/core/Input.cpp
+@@ -4,134 +4,16 @@
+ 
+ namespace nxui {
+ 
+-namespace {
+-
+-constexpr float kScreenWidth = 1280.f;
+-constexpr float kScreenHeight = 720.f;
+-constexpr float kPointerCenterX = kScreenWidth * 0.5f;
+-constexpr float kPointerCenterY = kScreenHeight * 0.5f;
+-constexpr float kGyroDeadzone = 0.002f;
+-constexpr float kNavStickDisableThreshold = 0.30f;
+-
+-float applyGyroDeadzone(float value) {
+-    if (std::abs(value) <= kGyroDeadzone)
+-        return 0.f;
+-
+-    return value;
+-}
+-
+-} // namespace
+-
+ void Input::initialize() {
+     padConfigureInput(8, HidNpadStyleSet_NpadStandard);
+     padInitializeAny(&m_pad);
+     hidInitializeTouchScreen();
+-
+-    recenterVirtualPointer();
+-    m_prevUpdateTick = armGetSystemTick();
+-
+ }
+ 
+ void Input::shutdown() {
+-    stopVirtualPointerSensors();
+-    m_virtualPointerEnabled = false;
+-}
+-
+-void Input::startVirtualPointerSensors() {
+-    if (m_sixAxisRunning)
+-        return;
+-
+-    m_hasHandheldSixAxis = R_SUCCEEDED(hidGetSixAxisSensorHandles(
+-        &m_handheldSixAxisHandle, 1, HidNpadIdType_Handheld, HidNpadStyleTag_NpadHandheld));
+-    m_hasFullKeySixAxis = R_SUCCEEDED(hidGetSixAxisSensorHandles(
+-        &m_fullKeySixAxisHandle, 1, HidNpadIdType_No1, HidNpadStyleTag_NpadFullKey));
+-    m_hasJoyDualSixAxis = R_SUCCEEDED(hidGetSixAxisSensorHandles(
+-        m_joyDualSixAxisHandles, 2, HidNpadIdType_No1, HidNpadStyleTag_NpadJoyDual));
+-
+-    if (m_hasHandheldSixAxis)
+-        hidStartSixAxisSensor(m_handheldSixAxisHandle);
+-    if (m_hasFullKeySixAxis)
+-        hidStartSixAxisSensor(m_fullKeySixAxisHandle);
+-    if (m_hasJoyDualSixAxis) {
+-        hidStartSixAxisSensor(m_joyDualSixAxisHandles[0]);
+-        hidStartSixAxisSensor(m_joyDualSixAxisHandles[1]);
+-    }
+-    m_sixAxisRunning = m_hasHandheldSixAxis || m_hasFullKeySixAxis || m_hasJoyDualSixAxis;
+-}
+-
+-void Input::stopVirtualPointerSensors() {
+-    if (!m_sixAxisRunning)
+-        return;
+-    if (m_hasHandheldSixAxis) {
+-        hidStopSixAxisSensor(m_handheldSixAxisHandle);
+-        m_hasHandheldSixAxis = false;
+-    }
+-    if (m_hasFullKeySixAxis) {
+-        hidStopSixAxisSensor(m_fullKeySixAxisHandle);
+-        m_hasFullKeySixAxis = false;
+-    }
+-    if (m_hasJoyDualSixAxis) {
+-        hidStopSixAxisSensor(m_joyDualSixAxisHandles[0]);
+-        hidStopSixAxisSensor(m_joyDualSixAxisHandles[1]);
+-        m_hasJoyDualSixAxis = false;
+-    }
+-    m_sixAxisRunning = false;
+-}
+-
+-void Input::setVirtualPointerEnabled(bool enabled) {
+-    if (m_virtualPointerEnabled == enabled)
+-        return;
+-    m_virtualPointerEnabled = enabled;
+-    if (enabled)
+-        startVirtualPointerSensors();
+-    else
+-        stopVirtualPointerSensors();
+-}
+-
+-void Input::setVirtualPointerShortcutsEnabled(bool enabled) {
+-    m_virtualPointerShortcutsEnabled = enabled;
+-    if (!enabled)
+-        setVirtualPointerEnabled(false);
+-}
+-
+-void Input::recenterVirtualPointer() {
+-    m_virtualPointerX = kPointerCenterX;
+-    m_virtualPointerY = kPointerCenterY;
+-}
+-
+-bool Input::readActiveSixAxisState(HidSixAxisSensorState& out) const {
+-    u32 styleSet = padGetStyleSet(&m_pad);
+-    if ((styleSet & HidNpadStyleTag_NpadHandheld) && m_hasHandheldSixAxis) {
+-        return hidGetSixAxisSensorStates(m_handheldSixAxisHandle, &out, 1) > 0;
+-    }
+-
+-    if ((styleSet & HidNpadStyleTag_NpadFullKey) && m_hasFullKeySixAxis) {
+-        return hidGetSixAxisSensorStates(m_fullKeySixAxisHandle, &out, 1) > 0;
+-    }
+-
+-    if ((styleSet & HidNpadStyleTag_NpadJoyDual) && m_hasJoyDualSixAxis) {
+-        u32 attributes = padGetAttributes(&m_pad);
+-        if ((attributes & HidNpadAttribute_IsRightConnected)
+-            && hidGetSixAxisSensorStates(m_joyDualSixAxisHandles[1], &out, 1) > 0) {
+-            return true;
+-        }
+-        if ((attributes & HidNpadAttribute_IsLeftConnected)
+-            && hidGetSixAxisSensorStates(m_joyDualSixAxisHandles[0], &out, 1) > 0) {
+-            return true;
+-        }
+-    }
+-
+-    return false;
+ }
+ 
+ void Input::update() {
+-    uint64_t nowTick = armGetSystemTick();
+-    float dt = m_prevUpdateTick
+-        ? static_cast<float>(nowTick - m_prevUpdateTick) / static_cast<float>(armGetSystemTickFreq())
+-        : (1.f / 60.f);
+-    m_prevUpdateTick = nowTick;
+-    if (dt > 0.05f) dt = 1.f / 60.f;
+-
+     padUpdate(&m_pad);
+     m_kDown = padGetButtonsDown(&m_pad);
+     m_kUp   = padGetButtonsUp(&m_pad);
+@@ -150,58 +32,13 @@ void Input::update() {
+     float hardwareTouchX = hardwareTouching ? tState.touches[0].x : m_touchX;
+     float hardwareTouchY = hardwareTouching ? tState.touches[0].y : m_touchY;
+ 
+-    bool navInputUsed =
+-        isDown(Button::DLeft)  || isDown(Button::DRight) ||
+-        isDown(Button::DUp)    || isDown(Button::DDown)  ||
+-        isDown(Button::LStickL)|| isDown(Button::LStickR)||
+-        isDown(Button::LStickU)|| isDown(Button::LStickD)||
+-        isDown(Button::RStickL)|| isDown(Button::RStickR)||
+-        isDown(Button::RStickU)|| isDown(Button::RStickD)||
+-        std::abs(m_lx) >= kNavStickDisableThreshold ||
+-        std::abs(m_ly) >= kNavStickDisableThreshold ||
+-        std::abs(m_rx) >= kNavStickDisableThreshold ||
+-        std::abs(m_ry) >= kNavStickDisableThreshold;
+-
+-    if (hardwareTouching || navInputUsed) {
+-        setVirtualPointerEnabled(false);
+-    }
+-
+-    if (m_virtualPointerShortcutsEnabled && isDown(Button::LStick)) {
+-        setVirtualPointerEnabled(!m_virtualPointerEnabled);
+-    }
+-    if (m_virtualPointerShortcutsEnabled && isDown(Button::RStick)) {
+-        recenterVirtualPointer();
+-    }
+-
+-    if (m_virtualPointerEnabled) {
+-        HidSixAxisSensorState sixAxis = {};
+-        if (readActiveSixAxisState(sixAxis)) {
+-            float roll = applyGyroDeadzone(sixAxis.angular_velocity.z);
+-            float pitch = applyGyroDeadzone(sixAxis.angular_velocity.x);
+-
+-            m_virtualPointerX = std::clamp(
+-                m_virtualPointerX - roll * m_virtualPointerSensitivity * dt,
+-                0.f, kScreenWidth - 1.f);
+-            m_virtualPointerY = std::clamp(
+-                m_virtualPointerY - pitch * m_virtualPointerSensitivity * dt,
+-                0.f, kScreenHeight - 1.f);
+-        }
+-    }
+-
+     m_wasTouching = m_touching;
+     if (hardwareTouching) {
+         m_touchX = hardwareTouchX;
+         m_touchY = hardwareTouchY;
+-    } else if (m_virtualPointerEnabled) {
+-        m_touchX = m_virtualPointerX;
+-        m_touchY = m_virtualPointerY;
+     }
+ 
+-    bool virtualTouching = !hardwareTouching
+-        && m_virtualPointerEnabled
+-        && (m_kHeld & static_cast<uint64_t>(Button::A));
+-
+-    m_touching = hardwareTouching || virtualTouching;
++    m_touching = hardwareTouching;
+ 
+     m_touchDown = (m_touching && !m_wasTouching);
+     m_touchUp   = (!m_touching && m_wasTouching);
+@@ -225,7 +62,6 @@ bool Input::isHeld(Button b) const { return m_kHeld & static_cast<uint64_t>(b);
+ bool Input::hasUserActivity() const {
+     constexpr float kActivityStickThreshold = 0.08f;
+     return m_kDown != 0 || m_kUp != 0 || m_touching || m_touchDown || m_touchUp
+-        || m_virtualPointerEnabled
+         || std::abs(m_lx) >= kActivityStickThreshold
+         || std::abs(m_ly) >= kActivityStickThreshold
+         || std::abs(m_rx) >= kActivityStickThreshold
+diff --git a/lib/nxui/src/core/Texture.cpp b/lib/nxui/src/core/Texture.cpp
+index 4f5769d..d26956f 100644
+--- a/lib/nxui/src/core/Texture.cpp
++++ b/lib/nxui/src/core/Texture.cpp
+@@ -283,8 +283,8 @@ bool Texture::loadFromFile(GpuDevice& gpu, Renderer& ren, const std::string& pat
+     return ok;
+ }
+ 
+-bool Texture::loadFromMemory(GpuDevice& gpu, Renderer& ren,
+-                             const uint8_t* data, size_t dataSize, int maxSide)
++bool Texture::decodeToRgba(const uint8_t* data, size_t dataSize, int maxSide,
++                           std::vector<uint8_t>& outRgba, int& outW, int& outH)
+ {
+     int w, h, ch;
+     uint8_t* pixels = stbi_load_from_memory(data, (int)dataSize, &w, &h, &ch, 4);
+@@ -294,26 +294,32 @@ bool Texture::loadFromMemory(GpuDevice& gpu, Renderer& ren,
+         float scale = std::min((float)maxSide / w, (float)maxSide / h);
+         int dw = std::max(1, (int)(w * scale));
+         int dh = std::max(1, (int)(h * scale));
+-        uint8_t* scaled = (uint8_t*)std::malloc((size_t)dw * dh * 4);
+-        if (scaled) {
+-            for (int y = 0; y < dh; ++y) {
+-                int sy = y * h / dh;
+-                for (int x = 0; x < dw; ++x) {
+-                    int sx = x * w / dw;
+-                    std::memcpy(scaled + ((size_t)y * dw + x) * 4,
+-                                pixels + ((size_t)sy * w + sx) * 4, 4);
+-                }
+-            }
+-            stbi_image_free(pixels);
+-            pixels = scaled;
+-            w = dw;
+-            h = dh;
++        outRgba.resize((size_t)dw * dh * 4);
++        for (int y = 0; y < dh; ++y) {
++            const uint8_t* srcRow = pixels + (size_t)(y * h / dh) * w * 4;
++            uint8_t* dstRow = outRgba.data() + (size_t)y * dw * 4;
++            for (int x = 0; x < dw; ++x)
++                std::memcpy(dstRow + (size_t)x * 4, srcRow + (size_t)(x * w / dw) * 4, 4);
+         }
++        outW = dw;
++        outH = dh;
++    } else {
++        outRgba.assign(pixels, pixels + (size_t)w * h * 4);
++        outW = w;
++        outH = h;
+     }
++    stbi_image_free(pixels);
++    return true;
++}
+ 
+-    bool ok = loadFromPixels(gpu, ren, pixels, w, h);
+-    std::free(pixels);
+-    return ok;
++bool Texture::loadFromMemory(GpuDevice& gpu, Renderer& ren,
++                             const uint8_t* data, size_t dataSize, int maxSide)
++{
++    std::vector<uint8_t> rgba;
++    int w = 0, h = 0;
++    if (!decodeToRgba(data, dataSize, maxSide, rgba, w, h))
++        return false;
++    return loadFromPixels(gpu, ren, rgba.data(), w, h);
+ }
+ 
+ bool Texture::loadFromSurface(GpuDevice& gpu, Renderer& ren,
+diff --git a/projects/daemon/src/main.cpp b/projects/daemon/src/main.cpp
+index 09a6602..9ca9fdd 100644
+--- a/projects/daemon/src/main.cpp
++++ b/projects/daemon/src/main.cpp
+@@ -1416,7 +1416,7 @@ static void handleMenuCommand() {
+             recordOperationResult(requestId, msg, result,
+                                   daemon::app::suspendedTitleId());
+         }
+-        switchu::FileLog::logCommit("[smi] queued resume (actions=%zu)", g_actionQueue.size());
++        switchu::FileLog::log("[smi] queued resume (actions=%zu)", g_actionQueue.size());
+         break;
+ 
+     case smi::SystemMessage::TerminateApplication:
+@@ -1577,8 +1577,20 @@ static void handleMenuCommand() {
+ }
+ 
+ static Result relaunchMenuAfterApplet(const char* appletName) {
++    // A black screen after a library applet means the menu never came back.
++    // Retry a few times (the previous menu instance may still be tearing down)
++    // and fall back to a plain main-menu start before giving up.
+     const auto status = buildSystemStatus();
+-    const Result rc = daemon::menu_la::launch(smi::MenuStartMode::AppletReturn, status);
++    Result rc = daemon::menu_la::launch(smi::MenuStartMode::AppletReturn, status);
++    for (int attempt = 1; R_FAILED(rc) && attempt <= 4; ++attempt) {
++        switchu::FileLog::log("[action] %s menu restore retry %d (last rc=0x%X)",
++                              appletName, attempt, rc);
++        svcSleepThread(250'000'000ULL * attempt);
++        appletRequestToGetForeground();
++        rc = daemon::menu_la::launch(attempt >= 3 ? smi::MenuStartMode::MainMenu
++                                                  : smi::MenuStartMode::AppletReturn,
++                                     buildSystemStatus());
++    }
+     switchu::FileLog::log(
+         "[action] %s menu restore rc=0x%X module=%u desc=%u running=%d suspended=0x%016lX",
+         appletName, rc, R_MODULE(rc), R_DESCRIPTION(rc), status.app_running ? 1 : 0,
+@@ -1605,9 +1617,14 @@ static bool handleAction(daemon::SystemAction& action) {
+         }
+ 
+         case daemon::SystemActionType::ResumeApplication: {
+-            switchu::FileLog::logCommit("[action] resume: calling app::resume()");
++            // Plain log lines: a synchronous SD commit here delayed the game
++            // coming back to the foreground. Failures are still committed.
++            switchu::FileLog::log("[action] resume: calling app::resume()");
+             Result rc = daemon::app::resume();
+-            switchu::FileLog::logCommit("[action] resume: app::resume() -> 0x%X", rc);
++            if (R_FAILED(rc))
++                switchu::FileLog::logCommit("[action] resume: app::resume() -> 0x%X", rc);
++            else
++                switchu::FileLog::log("[action] resume: app::resume() -> 0x%X", rc);
+             recordOperationResult(action.requestId, smi::SystemMessage::ResumeApplication,
+                                   rc, daemon::app::suspendedTitleId());
+             if (R_FAILED(rc)) {
+diff --git a/projects/menu/src/core/WiiUMenuApp.cpp b/projects/menu/src/core/WiiUMenuApp.cpp
+index fbffab5..e550a25 100644
+--- a/projects/menu/src/core/WiiUMenuApp.cpp
++++ b/projects/menu/src/core/WiiUMenuApp.cpp
+@@ -8,6 +8,7 @@
+ #include "DebugLog.hpp"
+ #include "bluetooth/BluetoothManager.hpp"
+ #include "LeaveFrameCache.hpp"
++#include "screen_fit.hpp"
+ #include <switch.h>
+ #ifdef SWITCHU_MENU
+ #include "smi_commands.hpp"
+@@ -594,17 +595,29 @@ bool WiiUMenuApp::saveLeaveFrame(nxui::Renderer& ren) {
+ 
+     const LeaveFrameSession session = captureLeaveSession();
+     m_leaveCaptureFocusTitleId = 0;
+-    if (!LeaveFrameCache::save(session, rgba.data(), width, height)) {
+-        DebugLog::log("[leave] cache write failed");
+-        return false;
+-    }
+ 
+-    DebugLog::log("[leave] saved %dx%d page=%d folder=%u focus=%016lX",
+-                  width, height, session.page, session.openFolderId,
+-                  static_cast<unsigned long>(session.focusTitleId));
++    // Never run two writers on the same file.
++    waitLeaveFrameWrite();
++    m_leaveFrameWriteFuture = std::async(std::launch::async,
++        [session, rgba = std::move(rgba), width, height]() mutable {
++            const bool ok = LeaveFrameCache::save(session, rgba.data(), width, height);
++            if (ok) {
++                DebugLog::log("[leave] saved %dx%d page=%d folder=%u focus=%016lX",
++                              width, height, session.page, session.openFolderId,
++                              static_cast<unsigned long>(session.focusTitleId));
++            } else {
++                DebugLog::log("[leave] cache write failed");
++            }
++            return ok;
++        });
+     return true;
+ }
+ 
++void WiiUMenuApp::waitLeaveFrameWrite() {
++    if (m_leaveFrameWriteFuture.valid())
++        m_leaveFrameWriteFuture.wait();
++}
++
+ void WiiUMenuApp::onAfterPresent(nxui::Renderer& ren) {
+     if (!m_leaveCapturePending)
+         return;
+@@ -670,8 +683,6 @@ void WiiUMenuApp::setLeaveMotionFrozen(bool frozen) {
+         m_background->setMotionPaused(frozen);
+     if (m_cursor)
+         m_cursor->setMotionPaused(frozen);
+-    if (m_pointerCursor)
+-        m_pointerCursor->setMotionPaused(frozen);
+     if (m_grid) {
+         for (auto& icon : m_grid->allIcons()) {
+             if (icon)
+@@ -783,6 +794,7 @@ bool WiiUMenuApp::onCreate() {
+         .playSfxModalHide = [this]() { m_audio.playSfx(Sfx::ModalHide); },
+         .requestExit = [this]() { app().requestExit(); },
+         .beforePowerAction = [this]() { return quiesceWritersForPowerAction(); },
++        .beforeHandoff = [this]() { waitLeaveFrameWrite(); },
+     });
+ 
+ 
+@@ -857,6 +869,7 @@ bool WiiUMenuApp::quiesceWritersForPowerAction() {
+         m_themePackageTransferFuture.wait();
+     if (m_softwareDeleteFuture.valid())
+         m_softwareDeleteFuture.wait();
++    waitLeaveFrameWrite();
+     if (m_layoutDirty)
+         saveMenuLayout();
+ 
+@@ -870,6 +883,8 @@ void WiiUMenuApp::onDestroy() {
+     // All background jobs may reference services or members owned by this
+     // activity. Drain them while the entire object graph is still alive, and
+     // only then shut down HTTP, Bluetooth, accessibility and audio.
++    // Make sure the last leave frame is fully on the SD card before exiting.
++    waitLeaveFrameWrite();
+     m_iconStreamer.cancelPending();
+     if (m_recentWidgetAssetDecode)
+         m_recentWidgetAssetDecode->cancelled.store(true);
+@@ -3510,7 +3525,7 @@ nxui::Rect WiiUMenuApp::folderPanelRect() const {
+     // geometry as IconGrid::dynamicIconRect so the plate tracks the row.
+     if (m_appLayoutMode == AppLayoutMode::DynamicLine) {
+         const nxui::Rect grid = m_grid->rect();
+-        const float centerY = grid.y + grid.height * 0.66f;
++        const float centerY = grid.y + grid.height * IconGrid::kLineCenterFraction;
+         constexpr float baseCellH = 150.f;
+         constexpr float focusScale = 1.36f;
+         constexpr float sideLift = 32.f;
+@@ -3553,7 +3568,9 @@ void WiiUMenuApp::syncSteamGridDbLogoArea() {
+         m_steamGridDbBackdrop->setLogoArea(
+             {370.f, top, 540.f, std::max(40.f, bottom - top)});
+     } else {
+-        m_steamGridDbBackdrop->setLogoArea({370.f, 149.f, 540.f, 150.f});
++        // The single-row carousel is vertically centred (focused tile spans
++        // roughly y 258-462), so the logo band must end above it.
++        m_steamGridDbBackdrop->setLogoArea({370.f, 100.f, 540.f, 146.f});
+     }
+ }
+ 
+@@ -4098,8 +4115,6 @@ void WiiUMenuApp::buildGrid() {
+ 
+     m_cursor = std::make_shared<SelectionCursor>();
+     m_cursor->setInstantMotion(m_config.cursorMotionMode == 1);
+-    m_pointerCursor = std::make_shared<SelectionCursor>();
+-    m_pointerCursor->setVisible(false);
+ 
+     m_clock = std::make_shared<DateTimeWidget>();
+     m_clock->setSize(150, 62);
+@@ -4308,7 +4323,7 @@ void WiiUMenuApp::buildGrid() {
+         scheduleLeaveCapture([this]() { m_launcher.launchMiiEditor(); });
+     };
+     sidebarActions.onControllers = [this]() {
+-        scheduleLeaveCapture([this]() { m_launcher.launchControllerPairing(); });
++        openControllerManager();
+     };
+ #else
+     sidebarActions.onAlbum       = [this]() { m_audio.playSfx(Sfx::Activate); };
+@@ -4508,8 +4523,14 @@ void WiiUMenuApp::buildGrid() {
+             }
+             m_steamGridDbPicker->showLoading(browse.titleId, browse.title, browse.query,
+                                              browse.kind, true);
+-            m_steamGridDbPicker->setMessage("Loading artwork for " + match.name + "...",
+-                                            true);
++            {
++                std::string loadingText = nxui::I18n::instance().tr(
++                    "sgdb_picker.loading_for", "Loading artwork for {}...");
++                const std::size_t at = loadingText.find("{}");
++                if (at != std::string::npos)
++                    loadingText.replace(at, 2, match.name);
++                m_steamGridDbPicker->setMessage(loadingText, true);
++            }
+             focusManager().setFocus(m_steamGridDbPicker.get());
+             m_steamGridDbBrowseFuture = std::async(std::launch::async,
+                 [apiKey = m_config.steamGridDbApiKey, browse, match]() {
+@@ -4528,7 +4549,6 @@ void WiiUMenuApp::buildGrid() {
+     m_overlayLayer->addChild(m_dialog);
+     m_overlayLayer->addChild(m_progressDialog);
+     m_overlayLayer->addChild(m_launchAnim);
+-    m_overlayLayer->addChild(m_pointerCursor);
+ 
+     root.addChild(m_bgLayer);
+     root.addChild(m_contentLayer);
+@@ -5033,6 +5053,13 @@ void WiiUMenuApp::leaveSystemSleep() {
+     m_systemAsleep = false;
+     app().setSleeping(false);
+ 
++    // The vi layer/swapchain goes stale across sleep: PresentQueue::acquireImage
++    // would block forever and freeze the menu on the last presented frame.
++    // Rebuild the swapchain, then re-apply the TV underscan size (the managed
++    // layer size can be reset by the OS during sleep) before presenting again.
++    app().gpu().recreateSwapchain();
++    switchu::menu::applyScreenUnderscan();
++
+     if (m_musicWasPlayingBeforeSleep && m_config.musicEnabled)
+         m_audio.play();
+     m_musicWasPlayingBeforeSleep = false;
+@@ -5889,23 +5916,6 @@ void WiiUMenuApp::onUpdateAwake(float dt) {
+ 
+     m_sidebar.update(dt, focusManager().current());
+ 
+-    if (m_pointerCursor) {
+-        bool showPointer = app().input().virtualPointerEnabled();
+-        m_pointerCursor->setVisible(showPointer);
+-        if (showPointer) {
+-            constexpr float kPointerSize = 30.f;
+-            float half = kPointerSize * 0.5f;
+-            nxui::Rect pointerRect {
+-                app().input().virtualPointerX() - half,
+-                app().input().virtualPointerY() - half,
+-                kPointerSize,
+-                kPointerSize,
+-            };
+-            m_pointerCursor->setOpacity(app().input().isTouching() ? 1.f : 0.92f);
+-            m_pointerCursor->moveTo(pointerRect, half, 0.06f);
+-        }
+-    }
+-
+     nxui::AnimationManager::instance().update(motionDt);
+ 
+     // In dynamic-line mode, and while a layout morph is in flight, the focused
+diff --git a/projects/menu/src/core/WiiUMenuApp.hpp b/projects/menu/src/core/WiiUMenuApp.hpp
+index e5bbc3e..55a127d 100644
+--- a/projects/menu/src/core/WiiUMenuApp.hpp
++++ b/projects/menu/src/core/WiiUMenuApp.hpp
+@@ -197,6 +197,10 @@ private:
+     void previewLeaveCaptureTitle(std::uint64_t titleId);
+     LeaveFrameSession captureLeaveSession() const;
+     bool saveLeaveFrame(nxui::Renderer& ren);
++    // The leave-frame file (~3.5 MB) is written on a worker so the resume /
++    // launch animation does not stall on the SD card. Anything that hands the
++    // screen over to another process must call this first.
++    void waitLeaveFrameWrite();
+     void restoreLeaveSession();
+     void setLeaveMotionFrozen(bool frozen);
+     void updateLeaveSplashHandoff(float dt);
+@@ -323,6 +327,7 @@ private:
+     void refreshAutoThemeSummary();
+     void pushGeoDisplayToScreen();
+     void createControllerTest();
++    void openControllerManager();
+     void reloadThemePresets();
+     void refreshThemeShopState();
+     std::vector<ThemeShopScreen::ThemeShopEntry> buildThemeShopEntries();
+@@ -406,7 +411,6 @@ private:
+     std::shared_ptr<WaraWaraBackground> m_background;
+     std::shared_ptr<IconGrid>          m_grid;
+     std::shared_ptr<SelectionCursor>   m_cursor;
+-    std::shared_ptr<SelectionCursor>   m_pointerCursor;
+     std::shared_ptr<DateTimeWidget>    m_clock;
+     std::shared_ptr<BatteryWidget>     m_battery;
+     std::shared_ptr<TitlePillWidget>   m_titlePill;
+@@ -485,7 +489,7 @@ private:
+         std::uint64_t revision = 0;
+     };
+ 
+-    nxui::ThreadPool m_threadPool{2};
++    nxui::ThreadPool m_threadPool{4};
+     SidebarManager  m_sidebar;
+     AppletLauncher  m_launcher;
+     AppListLoader   m_appLoader;
+@@ -647,6 +651,7 @@ private:
+     std::vector<AccountUid> m_pendingProfileUids;
+     std::size_t m_pendingProfileIndex = 0;
+     std::future<void> m_accessibilityFuture;
++    std::future<bool> m_leaveFrameWriteFuture;
+     bool m_accessibilityReady = false;
+     std::uint64_t m_fastReturnStartupTick = 0;
+ 
+diff --git a/projects/menu/src/core/WiiUMenuAppSettings.cpp b/projects/menu/src/core/WiiUMenuAppSettings.cpp
+index 17f1c37..4692287 100644
+--- a/projects/menu/src/core/WiiUMenuAppSettings.cpp
++++ b/projects/menu/src/core/WiiUMenuAppSettings.cpp
+@@ -483,9 +483,9 @@ void WiiUMenuApp::createSettings() {
+         startSteamGridDbScrape();
+     });
+     m_settings->onControllerPairing([this]() {
+-        if (m_settings) m_settings->hide();
+-        m_navigator.resetToHome();
+-        scheduleLeaveCapture([this]() { m_launcher.launchControllerPairing(); });
++        // SwitchU's own controller manager; the system applet is only used
++        // for actually pairing new controllers (Plus inside the manager).
++        openControllerManager();
+     });
+     m_settings->onControllerRemapping([this]() {
+         if (m_settings) m_settings->hide();
+@@ -791,8 +791,7 @@ void WiiUMenuApp::createQuickSettings() {
+         // drawer even though it is created lazily.
+         for (const auto& overlay : {std::static_pointer_cast<nxui::Widget>(m_dialog),
+                                    std::static_pointer_cast<nxui::Widget>(m_progressDialog),
+-                                   std::static_pointer_cast<nxui::Widget>(m_launchAnim),
+-                                   std::static_pointer_cast<nxui::Widget>(m_pointerCursor)}) {
++                                   std::static_pointer_cast<nxui::Widget>(m_launchAnim)}) {
+             if (!overlay) continue;
+             m_overlayLayer->removeChild(overlay.get());
+             m_overlayLayer->addChild(overlay);
+@@ -1452,6 +1451,14 @@ void WiiUMenuApp::refreshAutoThemeSummary() {
+     m_themeShop->setAutoThemeSummary(summary);
+ }
+ 
++void WiiUMenuApp::openControllerManager() {
++    if (!m_controllerTest || m_controllerTest->isActive()) return;
++    m_navigator.navigate(switchu::navigation::Route::ControllerTest);
++    m_controllerTest->showManager();
++    focusManager().setFocus(m_controllerTest.get());
++    m_audio.playSfx(Sfx::ModalShow);
++}
++
+ void WiiUMenuApp::createControllerTest() {
+     if (m_controllerTest) return;
+     m_controllerTest = std::make_shared<ControllerTestScreen>();
+@@ -1460,6 +1467,12 @@ void WiiUMenuApp::createControllerTest() {
+     m_controllerTest->setSmallFont(&m_fontSmall);
+     m_controllerTest->setTheme(&m_theme);
+     m_controllerTest->setInput(&app().input());
++    m_controllerTest->onSystemPairing([this]() {
++        if (m_controllerTest) m_controllerTest->hide();
++        if (m_settings && m_settings->isActive()) m_settings->hide();
++        m_navigator.resetToHome();
++        scheduleLeaveCapture([this]() { m_launcher.launchControllerPairing(); });
++    });
+     m_controllerTest->onCloseSfx([this]() { m_audio.playSfx(Sfx::ModalHide); });
+     m_controllerTest->onAccessibilityAnnouncement([this](const std::string& text) {
+         m_accessibility.announce(text);
+@@ -2545,11 +2558,6 @@ void WiiUMenuApp::applyTheme() {
+     m_cursor->setColor(m_theme.cursorNormal);
+     m_cursor->setCornerRadius(m_theme.cursorCornerRadius);
+     m_cursor->setBorderWidth(m_theme.cursorBorderWidth);
+-    if (m_pointerCursor) {
+-        m_pointerCursor->setColor(m_theme.cursorNormal);
+-        m_pointerCursor->setCornerRadius(15.f);
+-        m_pointerCursor->setBorderWidth(2.5f);
+-    }
+     DebugLog::log("[theme-apply] widget recolor cursors done");
+ 
+     m_clock->setBaseColor(m_theme.panelBase);
+diff --git a/projects/menu/src/debug/DebugImGuiOverlay.cpp b/projects/menu/src/debug/DebugImGuiOverlay.cpp
+index 6f3c10a..3095f3f 100644
+--- a/projects/menu/src/debug/DebugImGuiOverlay.cpp
++++ b/projects/menu/src/debug/DebugImGuiOverlay.cpp
+@@ -210,8 +210,7 @@ void DebugImGuiOverlay::updateInput(nxui::GpuDevice& gpu, const nxui::Input& inp
+     io.DeltaTime = std::max(m_deltaTime, 1.0f / 240.0f);
+ 
+     const bool hasPointerPosition = input.isTouching()
+-        || input.touchUp()
+-        || input.virtualPointerEnabled();
++        || input.touchUp();
+ 
+     if (hasPointerPosition) {
+         io.AddMousePosEvent(input.touchX(), input.touchY());
+@@ -223,7 +222,7 @@ void DebugImGuiOverlay::updateInput(nxui::GpuDevice& gpu, const nxui::Input& inp
+     if (input.touchUp()) io.AddMouseButtonEvent(0, false);
+ }
+ 
+-void DebugImGuiOverlay::drawWindow(nxui::Renderer& ren, nxui::Input& input, bool& open) {
++void DebugImGuiOverlay::drawWindow(nxui::Renderer& ren, bool& open) {
+     auto& lg = ren.liquidGlassSettings();
+     auto& settingsGlass = settings::debug::settingsGlassTuning();
+     bool rawBackdrop = ren.liquidGlassDebugRawBackdrop();
+@@ -354,13 +353,6 @@ void DebugImGuiOverlay::drawWindow(nxui::Renderer& ren, nxui::Input& input, bool
+     ImGui::SliderFloat("Settings Light Tint", &settingsGlass.tintAlphaLight, 0.0f, 0.5f);
+     ImGui::SliderFloat("Settings Saturation", &settingsGlass.saturation, 0.0f, 2.0f);
+ 
+-    ImGui::SeparatorText("Gyro Pointer");
+-    float gyroSensitivity = input.virtualPointerSensitivity();
+-    if (ImGui::SliderFloat("Gyro Sensitivity", &gyroSensitivity, 200.0f, 10000.0f, "%.0f")) {
+-        input.setVirtualPointerSensitivity(gyroSensitivity);
+-    }
+-    ImGui::Text("Pointer: %s", input.virtualPointerEnabled() ? "On" : "Off");
+-
+     ImGui::End();
+ }
+ 
+@@ -383,7 +375,7 @@ void DebugImGuiOverlay::render(nxui::Renderer& ren, nxui::Input& input, bool& op
+ 
+     updateInput(ren.gpu(), input);
+     ImGui::NewFrame();
+-    drawWindow(ren, input, open);
++    drawWindow(ren, open);
+     ImGui::Render();
+ 
+     m_wantsTouchCapture = ImGui::GetIO().WantCaptureMouse;
+diff --git a/projects/menu/src/debug/DebugImGuiOverlay.hpp b/projects/menu/src/debug/DebugImGuiOverlay.hpp
+index 218ceed..139b457 100644
+--- a/projects/menu/src/debug/DebugImGuiOverlay.hpp
++++ b/projects/menu/src/debug/DebugImGuiOverlay.hpp
+@@ -34,7 +34,7 @@ private:
+     bool createFontTexture(nxui::GpuDevice& gpu, nxui::Renderer& ren);
+     bool ensureDrawBuffers(nxui::GpuDevice& gpu, int slot, size_t vertexBytes, size_t indexBytes);
+     void updateInput(nxui::GpuDevice& gpu, const nxui::Input& input);
+-    void drawWindow(nxui::Renderer& ren, nxui::Input& input, bool& open);
++    void drawWindow(nxui::Renderer& ren, bool& open);
+     void renderDrawData(nxui::Renderer& ren, ImDrawData* drawData);
+ 
+     bool m_initialized = false;
+diff --git a/projects/menu/src/launcher/AppletLauncher.cpp b/projects/menu/src/launcher/AppletLauncher.cpp
+index ba3d8bd..a0dc723 100644
+--- a/projects/menu/src/launcher/AppletLauncher.cpp
++++ b/projects/menu/src/launcher/AppletLauncher.cpp
+@@ -40,6 +40,7 @@ bool AppletLauncher::preparePowerAction() {
+ }
+ 
+ void AppletLauncher::launchAlbum() {
++    beforeHandoff();
+     DebugLog::log("[launcher] requesting Album launch via daemon");
+     Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchAlbum);
+     DebugLog::log("[launcher] Album rc=0x%X", rc);
+@@ -50,6 +51,7 @@ void AppletLauncher::launchAlbum() {
+ }
+ 
+ void AppletLauncher::launchMiiEditor() {
++    beforeHandoff();
+     DebugLog::log("[launcher] requesting Mii Editor launch via daemon");
+     Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchMiiEditor);
+     DebugLog::log("[launcher] Mii Editor rc=0x%X", rc);
+@@ -60,6 +62,7 @@ void AppletLauncher::launchMiiEditor() {
+ }
+ 
+ void AppletLauncher::launchControllerPairing() {
++    beforeHandoff();
+     DebugLog::log("[launcher] requesting Controller pairing via daemon");
+     Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchControllers);
+     DebugLog::log("[launcher] Controller pairing rc=0x%X", rc);
+@@ -70,6 +73,7 @@ void AppletLauncher::launchControllerPairing() {
+ }
+ 
+ void AppletLauncher::launchControllerRemapping() {
++    beforeHandoff();
+     DebugLog::log("[launcher] requesting controller remapping via daemon");
+     Result rc = switchu::menu::smi_cmd::sendSimple(
+         switchu::smi::SystemMessage::LaunchControllerRemapping);
+@@ -81,6 +85,7 @@ void AppletLauncher::launchControllerRemapping() {
+ }
+ 
+ void AppletLauncher::launchNetConnect() {
++    beforeHandoff();
+     DebugLog::log("[launcher] requesting NetConnect launch via daemon");
+     Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchNetConnect);
+     DebugLog::log("[launcher] NetConnect rc=0x%X", rc);
+@@ -91,6 +96,7 @@ void AppletLauncher::launchNetConnect() {
+ }
+ 
+ void AppletLauncher::launchUserPage(AccountUid uid) {
++    beforeHandoff();
+     DebugLog::log("[launcher] requesting User Page launch via daemon");
+     Result rc = switchu::menu::smi_cmd::launchUserPage(uid);
+     DebugLog::log("[launcher] User Page rc=0x%X", rc);
+@@ -101,6 +107,7 @@ void AppletLauncher::launchUserPage(AccountUid uid) {
+ }
+ 
+ void AppletLauncher::launchUserCreator() {
++    beforeHandoff();
+     DebugLog::log("[launcher] requesting system user creator via daemon");
+     Result rc = switchu::menu::smi_cmd::sendSimple(
+         switchu::smi::SystemMessage::LaunchUserCreator);
+@@ -130,6 +137,7 @@ void AppletLauncher::reboot() {
+ }
+ 
+ void AppletLauncher::launchApplication(uint64_t titleId, AccountUid uid) {
++    beforeHandoff();
+     DebugLog::log("[launcher] tid=%016lX", titleId);
+     Result rc = switchu::menu::smi_cmd::launchApplication(titleId, uid);
+     if (R_FAILED(rc)) {
+@@ -145,11 +153,17 @@ void AppletLauncher::resumeApplication() {
+         DebugLog::log("[launcher] no app suspended!");
+         return;
+     }
+-    switchu::FileLog::logCommit("[launcher] resume: sending command");
++    // The leave frame must be on the SD card before the menu goes away, but
++    // nothing else needs a synchronous SD commit here: plain log lines keep
++    // the resume hand-off fast.
++    beforeHandoff();
++    switchu::FileLog::log("[launcher] resume: sending command");
+     const Result rc = switchu::menu::smi_cmd::resumeApplication();
+-    switchu::FileLog::logCommit("[launcher] resume: command returned 0x%X", rc);
++    if (R_FAILED(rc))
++        switchu::FileLog::logCommit("[launcher] resume: command FAIL 0x%X", rc);
++    else
++        switchu::FileLog::log("[launcher] resume: command returned 0x%X", rc);
+     if (m_cb.requestExit) m_cb.requestExit();
+-    switchu::FileLog::logCommit("[launcher] resume: exit requested");
+ }
+ 
+ void AppletLauncher::terminateApplication() {
+diff --git a/projects/menu/src/launcher/AppletLauncher.hpp b/projects/menu/src/launcher/AppletLauncher.hpp
+index d878447..9d1a49b 100644
+--- a/projects/menu/src/launcher/AppletLauncher.hpp
++++ b/projects/menu/src/launcher/AppletLauncher.hpp
+@@ -9,10 +9,18 @@ public:
+         std::function<void()>     playSfxModalHide;
+         std::function<void()>     requestExit;
+         std::function<bool()>     beforePowerAction;
++        // Called right before a command that hands the screen to another
++        // process (launch / resume / system applets).
++        std::function<void()>     beforeHandoff;
+     };
+ 
+     void init(Callbacks cbs);
+ 
++private:
++    void beforeHandoff() { if (m_cb.beforeHandoff) m_cb.beforeHandoff(); }
++
++public:
++
+     void launchAlbum();
+     void launchMiiEditor();
+     void launchControllerPairing();
+diff --git a/projects/menu/src/main.cpp b/projects/menu/src/main.cpp
+index e07a3cc..9d65eee 100644
+--- a/projects/menu/src/main.cpp
++++ b/projects/menu/src/main.cpp
+@@ -120,7 +120,9 @@ constexpr size_t kHeapLadder[] = {
+ };
+ }
+ 
+-extern "C" size_t g_switchuHeapSize = 0;
++extern "C" {
++size_t g_switchuHeapSize = 0;
++}
+ 
+ extern "C" void __libnx_initheap(void) {
+     extern char* fake_heap_start;
+diff --git a/projects/menu/src/settings/ControllerTestScreen.cpp b/projects/menu/src/settings/ControllerTestScreen.cpp
+index 45cf550..9935479 100644
+--- a/projects/menu/src/settings/ControllerTestScreen.cpp
++++ b/projects/menu/src/settings/ControllerTestScreen.cpp
+@@ -4,6 +4,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstdio>
++#include <cstring>
+ 
+ namespace {
+ constexpr float kStickSelectThreshold = 0.55f;
+@@ -25,9 +26,146 @@ ControllerTestScreen::ControllerTestScreen() {
+     setBlurEnabled(false);
+ }
+ 
++namespace {
++constexpr HidNpadIdType kPlayerIds[] = {
++    HidNpadIdType_No1, HidNpadIdType_No2, HidNpadIdType_No3, HidNpadIdType_No4,
++    HidNpadIdType_No5, HidNpadIdType_No6, HidNpadIdType_No7, HidNpadIdType_No8,
++    HidNpadIdType_Handheld,
++};
++
++std::string styleName(u32 style) {
++    auto& i18n = nxui::I18n::instance();
++    if (style == 0)
++        return i18n.tr("controllers.disconnected", "Not connected");
++    if (style & HidNpadStyleTag_NpadHandheld)
++        return i18n.tr("controllers.handheld", "Handheld mode");
++    if (style & HidNpadStyleTag_NpadFullKey)
++        return i18n.tr("controllers.pro", "Pro Controller");
++    if (style & HidNpadStyleTag_NpadJoyDual)
++        return i18n.tr("controllers.joycon_pair", "Joy-Con (L + R)");
++    if (style & HidNpadStyleTag_NpadJoyLeft)
++        return i18n.tr("controllers.joycon_l", "Joy-Con (L)");
++    if (style & HidNpadStyleTag_NpadJoyRight)
++        return i18n.tr("controllers.joycon_r", "Joy-Con (R)");
++    if (style & HidNpadStyleTag_NpadGc)
++        return i18n.tr("controllers.gamecube", "GameCube controller");
++    if (style & HidNpadStyleTag_NpadPalma)
++        return i18n.tr("controllers.poke_ball", "Poke Ball Plus");
++    return i18n.tr("controllers.other", "Other controller");
++}
++} // namespace
++
++void ControllerTestScreen::showManager() {
++    if (m_active)
++        return;
++    show();
++    m_mode = Mode::Manager;
++    m_managerSel = 0;
++    m_status.clear();
++    m_statusTime = 0.f;
++    if (m_accessibilityCb)
++        m_accessibilityCb(nxui::I18n::instance().tr("controllers.opened",
++            "Controllers. Up and Down select a player, Y swaps with the next player, X changes grip, Plus pairs a new controller, Minus tests input, B closes."));
++}
++
++void ControllerTestScreen::updateManager(float dt) {
++    if (m_statusTime > 0.f)
++        m_statusTime -= dt;
++    if (!m_input)
++        return;
++    auto& i18n = nxui::I18n::instance();
++
++    if (m_input->isDown(nxui::Button::DUp))
++        m_managerSel = (m_managerSel + kPlayerRows - 1) % kPlayerRows;
++    if (m_input->isDown(nxui::Button::DDown))
++        m_managerSel = (m_managerSel + 1) % kPlayerRows;
++
++    if (m_input->isDown(nxui::Button::Y) && m_managerSel < 7) {
++        Result rc = hidSwapNpadAssignment(kPlayerIds[m_managerSel], kPlayerIds[m_managerSel + 1]);
++        if (R_SUCCEEDED(rc)) {
++            ++m_managerSel;
++            setStatus(i18n.tr("controllers.swapped", "Player order changed"));
++        } else {
++            char buf[64];
++            std::snprintf(buf, sizeof(buf), "0x%X", (unsigned)rc);
++            setStatus(i18n.tr("controllers.swap_failed", "Could not change order") + " " + buf);
++        }
++        if (m_accessibilityCb) m_accessibilityCb(m_status);
++    }
++
++    if (m_input->isDown(nxui::Button::X)) {
++        HidNpadJoyHoldType hold = HidNpadJoyHoldType_Vertical;
++        hidGetNpadJoyHoldType(&hold);
++        hold = hold == HidNpadJoyHoldType_Vertical ? HidNpadJoyHoldType_Horizontal
++                                                   : HidNpadJoyHoldType_Vertical;
++        hidSetNpadJoyHoldType(hold);
++        setStatus(hold == HidNpadJoyHoldType_Horizontal
++            ? i18n.tr("controllers.grip_horizontal", "Joy-Con grip: horizontal (sideways)")
++            : i18n.tr("controllers.grip_vertical", "Joy-Con grip: vertical (single Joy-Con)"));
++        if (m_accessibilityCb) m_accessibilityCb(m_status);
++    }
++
++    if (m_input->isDown(nxui::Button::Plus) && m_pairingCb)
++        m_pairingCb();
++
++    if (m_input->isDown(nxui::Button::Minus)) {
++        m_mode = Mode::Test;
++        setupActions();
++        return;
++    }
++
++    if (m_input->isDown(nxui::Button::B))
++        hide();
++}
++
++void ControllerTestScreen::drawManager(nxui::Renderer& ren, const nxui::Rect& p, float alpha) {
++    auto& i18n = nxui::I18n::instance();
++    nxui::Rect list{p.x + 30.f, p.y + 82.f, p.width - 60.f, 452.f};
++    drawPanel(ren, *m_theme, list, alpha);
++
++    HidNpadJoyHoldType hold = HidNpadJoyHoldType_Vertical;
++    hidGetNpadJoyHoldType(&hold);
++
++    const float rowH = 46.f;
++    for (int i = 0; i < kPlayerRows; ++i) {
++        nxui::Rect row{list.x + 14.f, list.y + 12.f + i * (rowH + 2.f), list.width - 28.f, rowH};
++        const u32 style = hidGetNpadStyleSet(kPlayerIds[i]);
++        const bool connected = style != 0;
++        const bool sel = i == m_managerSel;
++        if (sel) {
++            ren.drawRoundedRect(row, m_theme->cursorNormal.withAlpha(0.22f * alpha), 14.f);
++            ren.drawRoundedRectOutline(row, m_theme->cursorNormal.withAlpha(0.85f * alpha), 14.f, 2.f);
++        }
++        std::string name = i == 8
++            ? i18n.tr("controllers.handheld_slot", "Handheld")
++            : i18n.tr("controllers.player", "Player") + " " + std::to_string(i + 1);
++        ren.drawText(name, {row.x + 18.f, row.y + 10.f}, m_font,
++                     m_theme->textPrimary.withAlpha(alpha), 0.80f);
++        ren.drawText(styleName(style), {row.x + 250.f, row.y + 12.f}, m_smallFont,
++                     (connected ? m_theme->textPrimary : m_theme->textSecondary)
++                         .withAlpha((connected ? 1.f : 0.6f) * alpha), 0.80f);
++        ren.drawCircle({row.right() - 28.f, row.y + rowH * 0.5f}, 8.f,
++                       (connected ? m_theme->cursorNormal : m_theme->panelBorder)
++                           .withAlpha((connected ? 0.95f : 0.35f) * alpha), 20);
++    }
++
++    std::string grip = hold == HidNpadJoyHoldType_Horizontal
++        ? i18n.tr("controllers.grip_horizontal_short", "Grip: horizontal")
++        : i18n.tr("controllers.grip_vertical_short", "Grip: vertical");
++    ren.drawText(grip, {p.x + 36.f, p.y + 548.f}, m_smallFont,
++                 m_theme->textSecondary.withAlpha(alpha), 0.76f);
++    if (m_statusTime > 0.f && !m_status.empty())
++        ren.drawText(m_status, {p.x + 36.f, p.y + 578.f}, m_smallFont,
++                     m_theme->textPrimary.withAlpha(alpha), 0.76f);
++    ren.drawText(i18n.tr("controllers.footer",
++                         "↑↓ Select   Y: Swap with next   X: Grip   +: Pair new   −: Test   B: Close"),
++                 {p.x + 36.f, p.y + 614.f}, m_smallFont, m_theme->textSecondary.withAlpha(alpha), 0.72f);
++}
++
+ void ControllerTestScreen::show() {
+     if (m_active)
+         return;
++    m_mode = Mode::Test;
+     m_active = true;
+     m_animatingOut = false;
+     m_activeStick = ActiveStick::None;
+@@ -44,8 +182,6 @@ void ControllerTestScreen::show() {
+     m_scale.setImmediate(0.92f);
+     m_scale.set(1.f, 0.24f, nxui::Easing::outCubic);
+     setVisible(true);
+-    if (m_input)
+-        m_input->setVirtualPointerShortcutsEnabled(false);
+     setupActions();
+     if (m_accessibilityCb)
+         m_accessibilityCb(nxui::I18n::instance().tr("controller_test.opened", "Controller test. Tilt a stick briefly to select it. Hold B for one second or press HOME to close."));
+@@ -55,8 +191,6 @@ void ControllerTestScreen::hide() {
+     if (!m_active || m_animatingOut)
+         return;
+     m_animatingOut = true;
+-    if (m_input)
+-        m_input->setVirtualPointerShortcutsEnabled(true);
+     if (m_closeSfxCb) m_closeSfxCb();
+     m_alpha.set(0.f, 0.18f, nxui::Easing::outCubic);
+     m_scale.set(0.96f, 0.18f, nxui::Easing::outCubic);
+@@ -88,7 +222,7 @@ nxui::Rect ControllerTestScreen::touchPanelRect(float scale) const {
+ }
+ 
+ void ControllerTestScreen::handleTouch(nxui::Input& input) {
+-    if (!m_active || m_animatingOut)
++    if (!m_active || m_animatingOut || m_mode == Mode::Manager)
+         return;
+ 
+     nxui::Rect zone{0.f, 0.f, 1280.f, 720.f};
+@@ -174,6 +308,11 @@ void ControllerTestScreen::update(float dt) {
+     if (!m_active || !m_input)
+         return;
+ 
++    if (m_mode == Mode::Manager) {
++        updateManager(dt);
++        return;
++    }
++
+     if (m_input->isHeld(nxui::Button::B)) {
+         m_bHoldTime += dt;
+         if (m_bHoldTime >= 1.f) {
+@@ -341,6 +480,12 @@ void ControllerTestScreen::render(nxui::Renderer& ren) {
+     ren.drawRect({0.f, 0.f, 1280.f, 720.f}, nxui::Color::black().withAlpha(0.12f * alpha));
+     ren.drawFrostedInset(p, m_theme->panelBase.withAlpha(m_theme->mode == nxui::ThemeMode::Dark ? 0.95f : 0.96f),
+                         m_theme->panelBorder.withAlpha(0.32f), m_theme->panelHighlight.withAlpha(0.10f), 26.f, alpha);
++    if (m_mode == Mode::Manager) {
++        ren.drawText(nxui::I18n::instance().tr("controllers.title", "Controllers"),
++                     {p.x + 30.f, p.y + 24.f}, m_font, m_theme->textPrimary.withAlpha(alpha), 1.f);
++        drawManager(ren, p, alpha);
++        return;
++    }
+     ren.drawText(nxui::I18n::instance().tr("controller_test.title", "Controller Test"),
+                  {p.x + 30.f, p.y + 24.f}, m_font, m_theme->textPrimary.withAlpha(alpha), 1.f);
+     const std::string closeHint = nxui::I18n::instance().tr(
+diff --git a/projects/menu/src/settings/ControllerTestScreen.hpp b/projects/menu/src/settings/ControllerTestScreen.hpp
+index 99d5b6d..c2eb8fd 100644
+--- a/projects/menu/src/settings/ControllerTestScreen.hpp
++++ b/projects/menu/src/settings/ControllerTestScreen.hpp
+@@ -5,6 +5,7 @@
+ #include <nxui/core/Font.hpp>
+ #include <nxui/core/Input.hpp>
+ #include <nxui/Theme.hpp>
++#include <switch.h>
+ #include <functional>
+ #include <string>
+ #include <vector>
+@@ -23,6 +24,10 @@ public:
+     void onCloseSfx(VoidCb cb) { m_closeSfxCb = std::move(cb); }
+     void onAccessibilityAnnouncement(StringCb cb) { m_accessibilityCb = std::move(cb); }
+ 
++    // Controller manager (SwitchU's own replacement for the system
++    // "Controllers" applet): lists players, reorders them, switches grip.
++    void showManager();
++    void onSystemPairing(VoidCb cb) { m_pairingCb = std::move(cb); }
+     void show();
+     void hide();
+     bool isActive() const { return m_active || m_animatingOut; }
+@@ -32,6 +37,12 @@ public:
+     void render(nxui::Renderer& ren) override;
+ 
+ private:
++    enum class Mode { Test, Manager };
++    static constexpr int kPlayerRows = 9; // Player 1-8 + handheld
++    void updateManager(float dt);
++    void drawManager(nxui::Renderer& ren, const nxui::Rect& panel, float alpha);
++    void setStatus(std::string text) { m_status = std::move(text); m_statusTime = 3.f; }
++
+     enum class ActiveStick { None, Left, Right };
+     struct ButtonVisual { nxui::Button button; const char* label; };
+ 
+@@ -66,6 +77,11 @@ private:
+     float m_bHoldTime = 0.f;
+     nxui::AnimatedFloat m_touchFullscreenAnim;
+     std::vector<nxui::Vec2> m_touchTrace;
++    Mode m_mode = Mode::Test;
++    int m_managerSel = 0;
++    std::string m_status;
++    float m_statusTime = 0.f;
++    VoidCb m_pairingCb;
+     VoidCb m_closedCb;
+     VoidCb m_closeSfxCb;
+     StringCb m_accessibilityCb;
+diff --git a/projects/menu/src/settings/FolderOptionsScreen.cpp b/projects/menu/src/settings/FolderOptionsScreen.cpp
+index 032e84e..63386b7 100644
+--- a/projects/menu/src/settings/FolderOptionsScreen.cpp
++++ b/projects/menu/src/settings/FolderOptionsScreen.cpp
+@@ -1,4 +1,5 @@
+ #include "FolderOptionsScreen.hpp"
++#include <nxui/core/Utf8.hpp>
+ #include "widgets/FolderPalette.hpp"
+ #include "widgets/FolderStyleDraw.hpp"
+ #include "core/FolderStore.hpp"
+@@ -12,7 +13,7 @@ std::string ellipsize(nxui::Font* font, std::string text, float maxWidth) {
+     if (!font || font->measure(text).x <= maxWidth)
+         return text;
+     while (!text.empty()) {
+-        text.pop_back();
++        nxui::popUtf8Codepoint(text);
+         if (font->measure(text + "...").x <= maxWidth)
+             return text + "...";
+     }
+diff --git a/projects/menu/src/settings/GameOptionsScreen.cpp b/projects/menu/src/settings/GameOptionsScreen.cpp
+index d6945b2..8125c38 100644
+--- a/projects/menu/src/settings/GameOptionsScreen.cpp
++++ b/projects/menu/src/settings/GameOptionsScreen.cpp
+@@ -1,4 +1,5 @@
+ #include "GameOptionsScreen.hpp"
++#include <nxui/core/Utf8.hpp>
+ #include <nxui/core/I18n.hpp>
+ #include <nxui/core/Renderer.hpp>
+ #include <algorithm>
+@@ -9,7 +10,7 @@ std::string ellipsize(nxui::Font* font, std::string text, float maxWidth, float
+     if (!font || font->measure(text).x * scale <= maxWidth)
+         return text;
+     while (!text.empty()) {
+-        text.pop_back();
++        nxui::popUtf8Codepoint(text);
+         if (font->measure(text + "...").x * scale <= maxWidth)
+             return text + "...";
+     }
+diff --git a/projects/menu/src/settings/SteamGridDbPickerScreen.cpp b/projects/menu/src/settings/SteamGridDbPickerScreen.cpp
+index 9c62dfd..a037c68 100644
+--- a/projects/menu/src/settings/SteamGridDbPickerScreen.cpp
++++ b/projects/menu/src/settings/SteamGridDbPickerScreen.cpp
+@@ -12,9 +12,29 @@
+ #include <chrono>
+ #include <cmath>
+ #include <cstring>
++#include <initializer_list>
+ #include <vector>
+ 
+ namespace {
++
++// Replaces the first "{}" placeholders (in order) with the given values, so
++// translations can reorder words around them.
++std::string fillPlaceholders(std::string text, std::initializer_list<std::string> values) {
++    std::size_t from = 0;
++    for (const auto& value : values) {
++        const std::size_t at = text.find("{}", from);
++        if (at == std::string::npos)
++            break;
++        text.replace(at, 2, value);
++        from = at + value.size();
++    }
++    return text;
++}
++
++inline std::string pickerText(const char* key, const char* fallback) {
++    return nxui::I18n::instance().tr(key, fallback);
++}
++
+ constexpr int kColumns = 4;
+ constexpr int kRows = 3;
+ constexpr int kPerPage = kColumns * kRows;
+@@ -129,7 +149,7 @@ void SteamGridDbPickerScreen::showLoading(std::uint64_t titleId,
+     m_selected = 0;
+     m_loading = true;
+     m_pickingGame = false;
+-    m_message = "Searching SteamGridDB...";
++    m_message = pickerText("settings.steamgriddb.download_start", "Searching SteamGridDB...");
+     m_active = true;
+     setVisible(true);
+ }
+@@ -143,8 +163,9 @@ void SteamGridDbPickerScreen::showGameList(const std::vector<GameMatch>& matches
+     m_result.gameMatches = matches;
+     m_result.success = !matches.empty();
+     m_message = matches.empty()
+-        ? "No games found"
+-        : std::to_string(matches.size()) + " games — pick one";
++        ? pickerText("sgdb_picker.no_games", "No games found")
++        : fillPlaceholders(pickerText("sgdb_picker.games_pick", "{} games — pick one"),
++                           {std::to_string(matches.size())});
+ }
+ 
+ void SteamGridDbPickerScreen::setResult(BrowseResult result) {
+@@ -176,7 +197,8 @@ void SteamGridDbPickerScreen::setResult(BrowseResult result) {
+     else if (!previousMatches.empty())
+         m_gameMatches = previousMatches;
+     if (m_result.success) {
+-        m_message = std::to_string(m_result.candidates.size()) + " choices for " + m_result.gameName;
++        m_message = fillPlaceholders(pickerText("sgdb_picker.choices_for", "{} choices for {}"),
++                                     {std::to_string(m_result.candidates.size()), m_result.gameName});
+     } else if (m_result.error.empty()) {
+         m_message = nxui::I18n::instance().tr(
+             "settings.steamgriddb.search_failed",
+@@ -359,8 +381,11 @@ nxui::Rect SteamGridDbPickerScreen::containRect(const nxui::Texture& texture,
+ }
+ 
+ std::string SteamGridDbPickerScreen::kindLabel() const {
+-    return m_result.kind == SteamGridDbManager::ArtworkKind::Hero ? "Hero"
+-         : m_result.kind == SteamGridDbManager::ArtworkKind::Logo ? "Logo" : "Icon";
++    return m_result.kind == SteamGridDbManager::ArtworkKind::Hero
++               ? pickerText("game.steamgriddb.hero", "Hero")
++         : m_result.kind == SteamGridDbManager::ArtworkKind::Logo
++               ? pickerText("game.steamgriddb.logo", "Logo")
++               : pickerText("sgdb_picker.kind_icon", "Icon");
+ }
+ 
+ int SteamGridDbPickerScreen::gameListCount() const {
+@@ -390,11 +415,11 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
+     if (bodyFont) {
+         // Keep search controls at near-native small-font size (old 0.72 scale
+         // made the query / Change name row almost unreadable on TV).
+-        const std::string searchLine = "Search  " + m_result.query;
++        const std::string searchLine = pickerText("sgdb_picker.search", "Search") + "  " + m_result.query;
+         renderer.drawText(searchLine, {108.f, 148.f}, bodyFont,
+                           m_theme->textPrimary, 1.f);
+         const float searchW = bodyFont->measure(searchLine).x;
+-        renderer.drawText("X  Change name", {108.f + searchW + 28.f, 148.f}, bodyFont,
++        renderer.drawText(pickerText("sgdb_picker.change_name", "X  Change name"), {108.f + searchW + 28.f, 148.f}, bodyFont,
+                           m_theme->cursorNormal, 1.f);
+     }
+ 
+@@ -430,7 +455,7 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
+         const std::string headline = transport
+             ? nxui::I18n::instance().tr("settings.steamgriddb.https_clock_title",
+                                         "Couldn't reach SteamGridDB")
+-            : "Search failed";
++            : pickerText("sgdb_picker.search_failed_title", "Search failed");
+         float textY = status.y + 36.f;
+         if (titleFont) {
+             renderer.drawText(headline, {status.x + 40.f, textY}, titleFont,
+@@ -444,7 +469,7 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
+                                   m_theme->textPrimary, 1.05f);
+                 textY += 34.f;
+             }
+-            renderer.drawText("B Back   X Try another search",
++            renderer.drawText(pickerText("sgdb_picker.hint_error", "B Back   X Try another search"),
+                               {status.x + 40.f, status.y + status.height - 48.f},
+                               bodyFont, m_theme->textSecondary, 0.95f);
+         }
+@@ -475,7 +500,7 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
+             }
+         }
+         if (bodyFont && count > 0) {
+-            renderer.drawText("A Choose game   B Back   X Search",
++            renderer.drawText(pickerText("sgdb_picker.hint_games", "A Choose game   B Back   X Search"),
+                               {108.f, 651.f}, bodyFont, m_theme->textSecondary, 0.95f);
+         }
+         return;
+@@ -510,9 +535,10 @@ void SteamGridDbPickerScreen::onRender(nxui::Renderer& renderer) {
+     }
+     if (bodyFont && count > 0) {
+         const int pages = (count + kPerPage - 1) / kPerPage;
+-        const char* backHint = m_gameMatches.empty() ? "B Back" : "B Games";
+-        renderer.drawText(std::string("A Apply   ") + backHint + "   X Search   Page "
+-                          + std::to_string(page + 1) + "/" + std::to_string(pages),
++        const std::string artHint = m_gameMatches.empty()
++            ? pickerText("sgdb_picker.hint_art_back", "A Apply   B Back   X Search   Page {}/{}")
++            : pickerText("sgdb_picker.hint_art_games", "A Apply   B Games   X Search   Page {}/{}");
++        renderer.drawText(fillPlaceholders(artHint, {std::to_string(page + 1), std::to_string(pages)}),
+                           {108.f, 651.f}, bodyFont, m_theme->textSecondary, 0.95f);
+     }
+ }
+@@ -540,14 +566,14 @@ void SteamGridDbPickerScreen::activateSelection() {
+         if (m_selected < 0 || m_selected >= count) return;
+         const GameMatch match = m_gameMatches[(size_t)m_selected];
+         m_loading = true;
+-        m_message = "Loading artwork for " + match.name + "...";
++        m_message = fillPlaceholders(pickerText("sgdb_picker.loading_for", "Loading artwork for {}..."), {match.name});
+         if (m_pickGameCb) m_pickGameCb(m_result, match);
+         return;
+     }
+     const int count = artworkCount();
+     if (m_selected < 0 || m_selected >= count) return;
+     m_loading = true;
+-    m_message = "Applying selection...";
++    m_message = pickerText("sgdb_picker.applying", "Applying selection...");
+     if (m_applyCb) m_applyCb(m_result, m_result.candidates[(size_t)m_selected]);
+ }
+ 
+diff --git a/projects/menu/src/settings/TabbedOverlayScreen.cpp b/projects/menu/src/settings/TabbedOverlayScreen.cpp
+index 0afb781..4bc8947 100644
+--- a/projects/menu/src/settings/TabbedOverlayScreen.cpp
++++ b/projects/menu/src/settings/TabbedOverlayScreen.cpp
+@@ -1,4 +1,5 @@
+ #include "TabbedOverlayScreen.hpp"
++#include <nxui/core/Utf8.hpp>
+ #include "SettingItemWidgets.hpp"
+ #include "core/DebugLog.hpp"
+ #include <nxui/core/I18n.hpp>
+@@ -824,7 +825,7 @@ void TabbedOverlayScreen::drawDropdown(nxui::Renderer& ren, const nxui::Rect& pa
+             if (tsz.x > maxWidth) {
+                 std::string ellipsis = "...";
+                 while (!displayText.empty()) {
+-                    displayText.pop_back();
++                    nxui::popUtf8Codepoint(displayText);
+                     tsz = m_smallFont->measure(displayText + ellipsis);
+                     if (tsz.x <= maxWidth || displayText.empty())
+                         break;
+@@ -862,7 +863,7 @@ void TabbedOverlayScreen::drawTrackChangedToast(nxui::Renderer& ren, const nxui:
+     nxui::Vec2 tsz = m_smallFont->measure(displayText);
+     if (tsz.x * 0.78f > maxTextWidth) {
+         while (!displayText.empty() && m_smallFont->measure(displayText + "...").x * 0.78f > maxTextWidth)
+-            displayText.pop_back();
++            nxui::popUtf8Codepoint(displayText);
+         displayText += "...";
+         tsz = m_smallFont->measure(displayText);
+     }
+diff --git a/projects/menu/src/themeshop/ThemeCatalogClient.cpp b/projects/menu/src/themeshop/ThemeCatalogClient.cpp
+index 204f606..f15123b 100644
+--- a/projects/menu/src/themeshop/ThemeCatalogClient.cpp
++++ b/projects/menu/src/themeshop/ThemeCatalogClient.cpp
+@@ -15,8 +15,10 @@
+ #include <switch.h>
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <chrono>
+ #include <stdexcept>
++#include <thread>
+ 
+ namespace {
+ 
+@@ -289,6 +291,8 @@ ThemeCatalogClient::Snapshot ThemeCatalogClient::loadCatalog(const std::string&
+         throw std::runtime_error("Catalog is missing the themes array");
+ 
+     snapshot.entries.reserve(themesIt->size());
++    std::vector<std::size_t> needsManifest;
++    constexpr std::size_t kManifestWorkers = 6;
+     for (const auto& item : *themesIt) {
+         if (!item.is_object())
+             continue;
+@@ -311,25 +315,64 @@ ThemeCatalogClient::Snapshot ThemeCatalogClient::loadCatalog(const std::string&
+             continue;
+         if (entry.manifest.empty())
+             entry.manifest = deriveManifestPath(entry.path);
+-        if ((entry.cover.empty() || entry.screenshots.empty()) && !entry.manifest.empty()) {
++        if ((entry.cover.empty() || entry.screenshots.empty()) && !entry.manifest.empty())
++            needsManifest.push_back(snapshot.entries.size());
++
++        snapshot.entries.push_back(std::move(entry));
++    }
++
++    // Fetch the per-theme manifests in parallel (they used to be fetched one
++    // after another, which made opening the shop take N x round-trip time).
++    if (!needsManifest.empty()) {
++        std::vector<PreviewData> previews(needsManifest.size());
++        std::vector<char> fetched(needsManifest.size(), 0);
++        std::atomic<std::size_t> next{0};
++        const std::size_t workerCount = std::min<std::size_t>(kManifestWorkers, needsManifest.size());
++
++        auto work = [&]() {
++            for (;;) {
++                const std::size_t i = next.fetch_add(1);
++                if (i >= needsManifest.size())
++                    return;
++                const Entry& e = snapshot.entries[needsManifest[i]];
++                try {
++                    previews[i] = derivePreviewDataFromManifest(url, e);
++                    fetched[i] = 1;
++                } catch (const std::exception& ex) {
++                    DebugLog::log("[themeshop] manifest preview fallback failed for %s: %s",
++                                  e.id.c_str(), ex.what());
++                } catch (...) {
++                }
++            }
++        };
++
++        std::vector<std::thread> workers;
++        workers.reserve(workerCount > 0 ? workerCount - 1 : 0);
++        for (std::size_t w = 1; w < workerCount; ++w) {
+             try {
+-                PreviewData preview = derivePreviewDataFromManifest(url, entry);
+-                if (entry.cover.empty())
+-                    entry.cover = preview.cover;
+-                for (auto& screenshotPath : preview.screenshots)
+-                    appendUniqueString(entry.screenshots, std::move(screenshotPath));
+-            } catch (const std::exception& ex) {
+-                DebugLog::log("[themeshop] manifest preview fallback failed for %s: %s",
+-                              entry.id.c_str(),
+-                              ex.what());
++                workers.emplace_back(work);
++            } catch (...) {
++                break; // out of threads: remaining work runs on this one
+             }
+         }
+-
+-        ensureCoverFirst(entry);
+-
+-        snapshot.entries.push_back(std::move(entry));
++        work();
++        for (auto& t : workers)
++            t.join();
++
++        for (std::size_t i = 0; i < needsManifest.size(); ++i) {
++            if (!fetched[i])
++                continue;
++            Entry& e = snapshot.entries[needsManifest[i]];
++            if (e.cover.empty())
++                e.cover = previews[i].cover;
++            for (auto& shot : previews[i].screenshots)
++                appendUniqueString(e.screenshots, std::move(shot));
++        }
+     }
+ 
++    for (auto& e : snapshot.entries)
++        ensureCoverFirst(e);
++
+     std::sort(snapshot.entries.begin(), snapshot.entries.end(), [](const Entry& lhs, const Entry& rhs) {
+         if (lhs.name != rhs.name)
+             return lhs.name < rhs.name;
+diff --git a/projects/menu/src/themeshop/ThemeHttp.cpp b/projects/menu/src/themeshop/ThemeHttp.cpp
+index ce0179c..4043049 100644
+--- a/projects/menu/src/themeshop/ThemeHttp.cpp
++++ b/projects/menu/src/themeshop/ThemeHttp.cpp
+@@ -14,13 +14,23 @@
+ #include <cctype>
+ #include <cstdio>
+ #include <ctime>
++#include <memory>
+ #include <mutex>
++#include <shared_mutex>
+ #include <sstream>
+ #include <stdexcept>
+ 
+ namespace {
+ 
+-std::mutex g_themeHttpMutex;
++// Transfers hold the shared lock and run concurrently; (re)initialising or
++// shutting the runtime down takes the exclusive lock.
++std::shared_mutex g_themeHttpMutex;
++// Idle curl handles. Re-using a handle keeps the TLS connection to the host
++// alive, which removes the handshake (several hundred ms on the Switch) from
++// every request after the first.
++std::mutex g_poolMutex;
++std::vector<std::unique_ptr<curlpp::Easy>> g_easyPool;
++constexpr std::size_t kMaxPooledHandles = 6;
+ bool g_nifmInitialized = false;
+ bool g_socketInitialized = false;
+ bool g_curlInitialized = false;
+@@ -37,7 +47,17 @@ bool runtimeInitializedLocked() {
+     return g_nifmInitialized && g_socketInitialized && g_curlInitialized;
+ }
+ 
++void drainEasyPool() {
++    std::vector<std::unique_ptr<curlpp::Easy>> doomed;
++    {
++        std::lock_guard<std::mutex> lk(g_poolMutex);
++        doomed.swap(g_easyPool);
++    }
++    doomed.clear();
++}
++
+ void shutdownRuntimeLocked() {
++    drainEasyPool();
+     if (g_curlInitialized) {
+         curl_global_cleanup();
+         g_curlInitialized = false;
+@@ -108,7 +128,7 @@ bool isAbortRequested(const themeshop::http::AbortCheck& shouldAbort) {
+ 
+ void configureRequest(curlpp::Easy& request,
+                       const std::string& url,
+-                      std::ostringstream& response,
++                      std::vector<std::uint8_t>& response,
+                       const std::list<std::string>& headers,
+                       const themeshop::http::ProgressCallback& onProgress = {},
+                       const themeshop::http::AbortCheck& shouldAbort = {}) {
+@@ -122,7 +142,16 @@ void configureRequest(curlpp::Easy& request,
+     if (!headers.empty()) {
+         request.setOpt<curlpp::options::HttpHeader>(headers);
+     }
+-    request.setOpt<curlpp::options::WriteStream>(&response);
++    // Let curl negotiate gzip/deflate (it decodes transparently) - catalog
++    // and manifest JSON shrink a lot. Empty string = every encoding built in.
++    request.setOpt<curlpp::options::AcceptEncoding>("");
++    request.setOpt<curlpp::options::WriteFunction>(
++        [&response](char* ptr, size_t size, size_t nmemb) -> size_t {
++            const size_t total = size * nmemb;
++            const auto* bytes = reinterpret_cast<const std::uint8_t*>(ptr);
++            response.insert(response.end(), bytes, bytes + total);
++            return total;
++        });
+     if (onProgress || shouldAbort) {
+         request.setOpt<curlpp::options::NoProgress>(false);
+         request.setOpt<curlpp::options::ProgressFunction>(
+@@ -138,6 +167,27 @@ void configureRequest(curlpp::Easy& request,
+     }
+ }
+ 
++std::unique_ptr<curlpp::Easy> acquireEasy() {
++    {
++        std::lock_guard<std::mutex> lk(g_poolMutex);
++        if (!g_easyPool.empty()) {
++            auto handle = std::move(g_easyPool.back());
++            g_easyPool.pop_back();
++            handle->reset(); // drops options, keeps live connections
++            return handle;
++        }
++    }
++    return std::make_unique<curlpp::Easy>();
++}
++
++void releaseEasy(std::unique_ptr<curlpp::Easy> handle) {
++    if (!handle)
++        return;
++    std::lock_guard<std::mutex> lk(g_poolMutex);
++    if (g_easyPool.size() < kMaxPooledHandles)
++        g_easyPool.push_back(std::move(handle));
++}
++
+ std::vector<std::uint8_t> performRequestBytes(const std::string& url,
+                                               const std::list<std::string>& headers,
+                                               const themeshop::http::ProgressCallback& onProgress,
+@@ -145,11 +195,11 @@ std::vector<std::uint8_t> performRequestBytes(const std::string& url,
+     if (isAbortRequested(shouldAbort))
+         throw std::runtime_error("Cancelled");
+ 
+-    std::ostringstream response;
+-    curlpp::Easy request;
+-    configureRequest(request, url, response, headers, onProgress, shouldAbort);
++    std::vector<std::uint8_t> response;
++    auto request = acquireEasy();
++    configureRequest(*request, url, response, headers, onProgress, shouldAbort);
+     try {
+-        request.perform();
++        request->perform();
+     } catch (const curlpp::LibcurlRuntimeError& ex) {
+         if (isAbortRequested(shouldAbort))
+             throw std::runtime_error("Cancelled");
+@@ -179,33 +229,53 @@ std::vector<std::uint8_t> performRequestBytes(const std::string& url,
+     if (isAbortRequested(shouldAbort))
+         throw std::runtime_error("Cancelled");
+ 
+-    long statusCode = curlpp::infos::ResponseCode::get(request);
+-    std::string body = response.str();
++    long statusCode = curlpp::infos::ResponseCode::get(*request);
++    // Handle is healthy again: keep it (and its connection) for the next request.
++    releaseEasy(std::move(request));
+     if (statusCode < 200 || statusCode >= 300) {
+-        std::string detail = body.substr(0, 240);
++        std::string detail(response.begin(),
++                           response.begin() + std::min<std::size_t>(response.size(), 240));
+         std::replace(detail.begin(), detail.end(), '\n', ' ');
+         std::replace(detail.begin(), detail.end(), '\r', ' ');
+         throw std::runtime_error("HTTP error " + std::to_string(statusCode)
+                                  + (detail.empty() ? std::string() : ": " + detail));
+     }
+ 
+-    return std::vector<std::uint8_t>(body.begin(), body.end());
++    return response;
++}
++
++bool ensureRuntimeReady() {
++    {
++        std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
++        if (runtimeInitializedLocked())
++            return true;
++    }
++    std::unique_lock<std::shared_mutex> lk(g_themeHttpMutex);
++    return initializeRuntimeLocked();
++}
++
++void resetRuntime() {
++    std::unique_lock<std::shared_mutex> lk(g_themeHttpMutex);
++    shutdownRuntimeLocked();
+ }
+ 
+ std::vector<std::uint8_t> performBytes(const std::string& url,
+                                        const std::list<std::string>& headers,
+                                        const themeshop::http::ProgressCallback& onProgress = {},
+                                        const themeshop::http::AbortCheck& shouldAbort = {}) {
+-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
+-
+     std::string lastError = "Theme Shop HTTP request failed";
+     for (int attempt = 1; attempt <= kRequestAttemptCount; ++attempt) {
+         if (isAbortRequested(shouldAbort))
+             throw std::runtime_error("Cancelled");
++        bool retryable = true;
+         try {
+-            if (!initializeRuntimeLocked()) {
++            if (!ensureRuntimeReady())
++                throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
++
++            // Shared lock: any number of transfers run in parallel.
++            std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
++            if (!runtimeInitializedLocked())
+                 throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
+-            }
+ 
+             ensureInternetConnectionReady(url);
+             auto bytes = performRequestBytes(url, headers, onProgress, shouldAbort);
+@@ -219,6 +289,9 @@ std::vector<std::uint8_t> performBytes(const std::string& url,
+                 lastError = "HTTPS request failed";
+             if (lastError == "Cancelled" || isAbortRequested(shouldAbort))
+                 throw std::runtime_error("Cancelled");
++            // A definite 4xx answer will not change on retry.
++            if (lastError.rfind("HTTP error 4", 0) == 0)
++                retryable = false;
+             DebugLog::log("[themeshop] request failed (%d/%d): %s -> %s",
+                           attempt,
+                           kRequestAttemptCount,
+@@ -234,8 +307,13 @@ std::vector<std::uint8_t> performBytes(const std::string& url,
+                           url.c_str());
+         }
+ 
++        if (!retryable)
++            break;
+         if (attempt < kRequestAttemptCount) {
+-            shutdownRuntimeLocked();
++            // Only tear the runtime down for connection-level failures, not for
++            // HTTP status errors (that would also kill other parallel transfers).
++            if (lastError.rfind("HTTP error", 0) != 0)
++                resetRuntime();
+         }
+     }
+ 
+@@ -333,7 +411,6 @@ std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort)
+         "https://1.1.1.1/",
+     };
+ 
+-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
+     std::string lastError = "Clock sync request failed";
+ 
+     for (const char* url : kUrls) {
+@@ -341,7 +418,10 @@ std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort)
+             if (isAbortRequested(shouldAbort))
+                 throw std::runtime_error("Cancelled");
+             try {
+-                if (!initializeRuntimeLocked())
++                if (!ensureRuntimeReady())
++                    throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
++                std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
++                if (!runtimeInitializedLocked())
+                     throw std::runtime_error("Theme Shop HTTP runtime is unavailable");
+                 ensureInternetConnectionReady(url);
+                 return performUtcUnixTimeRequest(url, shouldAbort);
+@@ -359,7 +439,7 @@ std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort)
+                               attempt, kRequestAttemptCount, url);
+             }
+             if (attempt < kRequestAttemptCount)
+-                shutdownRuntimeLocked();
++                resetRuntime();
+         }
+     }
+ 
+@@ -371,23 +451,23 @@ std::uint64_t performUtcUnixTime(const themeshop::http::AbortCheck& shouldAbort)
+ namespace themeshop::http {
+ 
+ bool initialize() {
+-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
+-    return initializeRuntimeLocked();
++    return ensureRuntimeReady();
+ }
+ 
+ void shutdown() {
+-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
+-    shutdownRuntimeLocked();
++    resetRuntime();
+ }
+ 
+ bool isInitialized() {
+-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
++    std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
+     return runtimeInitializedLocked();
+ }
+ 
+ bool isInternetReadyForHttp() {
+-    std::lock_guard<std::mutex> lk(g_themeHttpMutex);
+-    if (!initializeRuntimeLocked())
++    if (!ensureRuntimeReady())
++        return false;
++    std::shared_lock<std::shared_mutex> lk(g_themeHttpMutex);
++    if (!runtimeInitializedLocked())
+         return false;
+ 
+     NifmInternetConnectionStatus status = NifmInternetConnectionStatus_ConnectingUnknown1;
+diff --git a/projects/menu/src/themeshop/ThemeShopScreen.cpp b/projects/menu/src/themeshop/ThemeShopScreen.cpp
+index 755d95b..9ca4a30 100644
+--- a/projects/menu/src/themeshop/ThemeShopScreen.cpp
++++ b/projects/menu/src/themeshop/ThemeShopScreen.cpp
+@@ -28,7 +28,7 @@ namespace {
+ constexpr int kCommunityPreviewGridCols = 2;
+ constexpr int kCommunityPreviewVisibleRows = 2;
+ constexpr int kCommunityPreviewEntriesPerPage = kCommunityPreviewGridCols * kCommunityPreviewVisibleRows;
+-constexpr int kMaxPreviewUploadsPerFrame = 1;
++constexpr int kMaxPreviewUploadsPerFrame = 2;
+ constexpr int kMaxPreviewDownloadsInFlight = kCommunityPreviewEntriesPerPage;
+ constexpr int kCommunityPreviewMaxSide = 960;
+ 
+@@ -487,13 +487,25 @@ void ThemeShopScreen::primeCommunityPreview(const std::string& previewPath) {
+                     return;
+             }
+ 
+-            std::vector<std::uint8_t> bytes = themeshop::http::getBytes(url);
++            std::vector<std::uint8_t> encoded = themeshop::http::getBytes(url);
++            // Decode + downscale here on the worker; the render thread then only
++            // uploads ready pixels instead of stalling on JPEG/PNG decoding.
++            std::vector<std::uint8_t> rgba;
++            int w = 0, h = 0;
++            if (!encoded.empty()
++                && !nxui::Texture::decodeToRgba(encoded.data(), encoded.size(),
++                                                kCommunityPreviewMaxSide, rgba, w, h)) {
++                rgba.clear();
++            }
++            encoded = {};
+             std::lock_guard<std::mutex> lk(slot->mutex);
+             if (slot->cancelled) {
+                 slot->bytes.clear();
+                 return;
+             }
+-            slot->bytes = std::move(bytes);
++            slot->bytes = std::move(rgba);
++            slot->width = w;
++            slot->height = h;
+             if (slot->bytes.empty()) {
+                 slot->failureCount += 1;
+                 slot->phase = PreviewPhase::Failed;
+@@ -590,6 +602,7 @@ void ThemeShopScreen::syncFinishedCommunityPreviewLoads() {
+         }
+ 
+         std::vector<std::uint8_t> bytes;
++        int pixelW = 0, pixelH = 0;
+         {
+             std::lock_guard<std::mutex> lk(state->mutex);
+             if (state->phase == PreviewPhase::Downloaded) {
+@@ -597,6 +610,8 @@ void ThemeShopScreen::syncFinishedCommunityPreviewLoads() {
+                     hasPendingWork = true;
+                 } else {
+                     bytes = std::move(state->bytes);
++                    pixelW = state->width;
++                    pixelH = state->height;
+                 }
+             }
+         }
+@@ -606,7 +621,8 @@ void ThemeShopScreen::syncFinishedCommunityPreviewLoads() {
+ 
+         ++uploadsThisFrame;
+         nxui::Texture uploaded;
+-        bool ok = uploaded.loadFromMemory(*m_gpu, *m_renderer, bytes.data(), bytes.size(), kCommunityPreviewMaxSide);
++        bool ok = pixelW > 0 && pixelH > 0
++            && uploaded.loadFromPixels(*m_gpu, *m_renderer, bytes.data(), pixelW, pixelH);
+         std::lock_guard<std::mutex> lk(state->mutex);
+         state->bytes.clear();
+         if (ok) {
+diff --git a/projects/menu/src/themeshop/ThemeShopScreen.hpp b/projects/menu/src/themeshop/ThemeShopScreen.hpp
+index 4b7477d..738b89e 100644
+--- a/projects/menu/src/themeshop/ThemeShopScreen.hpp
++++ b/projects/menu/src/themeshop/ThemeShopScreen.hpp
+@@ -140,7 +140,9 @@ private:
+         int failureCount = 0;
+         bool cancelled = false;
+         std::string url;
+-        std::vector<std::uint8_t> bytes;
++        std::vector<std::uint8_t> bytes; // decoded RGBA8 once phase == Downloaded
++        int width = 0;
++        int height = 0;
+         std::future<void> future;
+         nxui::Texture texture;
+     };
+diff --git a/projects/menu/src/themeshop/ThemeShopScreenUi.cpp b/projects/menu/src/themeshop/ThemeShopScreenUi.cpp
+index 39ecb77..4bc034a 100644
+--- a/projects/menu/src/themeshop/ThemeShopScreenUi.cpp
++++ b/projects/menu/src/themeshop/ThemeShopScreenUi.cpp
+@@ -1,4 +1,5 @@
+ #include "ThemeShopScreen.hpp"
++#include <nxui/core/Utf8.hpp>
+ 
+ #include "widgets/ActionButtonStyle.hpp"
+ #include "core/DebugLog.hpp"
+@@ -190,7 +191,7 @@ std::string ellipsize(nxui::Font* font, const std::string& text, float maxWidth,
+ 
+     std::string out = text;
+     while (!out.empty() && measureTextCached(font, out + "...").x * scale > maxWidth)
+-        out.pop_back();
++        nxui::popUtf8Codepoint(out);
+ 
+     std::string result = out.empty() ? text : out + "...";
+     if (g_ellipsizeCache.size() >= kEllipsizeCacheLimit)
+diff --git a/projects/menu/src/tutorial/TutorialActivity.cpp b/projects/menu/src/tutorial/TutorialActivity.cpp
+index cce2213..db0fb47 100644
+--- a/projects/menu/src/tutorial/TutorialActivity.cpp
++++ b/projects/menu/src/tutorial/TutorialActivity.cpp
+@@ -20,8 +20,63 @@ static constexpr const char* TUTORIAL_ASSETS = "sdmc:/switch/SwitchU";
+ 
+ namespace {
+ 
+-bool isTextChar(char ch) {
+-    return std::isalnum(static_cast<unsigned char>(ch)) != 0;
++// Length in bytes of the UTF-8 sequence starting at text[pos]. Falls back to 1
++// for stray/invalid bytes and clamps to the end of the string, so the typewriter
++// can never stop in the middle of a multi-byte character (Cyrillic is 2 bytes).
++size_t utf8SequenceLength(const std::string& text, size_t pos) {
++    const unsigned char lead = static_cast<unsigned char>(text[pos]);
++    size_t len = 1;
++    if (lead >= 0xF0)      len = 4;
++    else if (lead >= 0xE0) len = 3;
++    else if (lead >= 0xC0) len = 2;
++    if (pos + len > text.size())
++        return text.size() - pos;
++    for (size_t i = 1; i < len; ++i) {
++        if ((static_cast<unsigned char>(text[pos + i]) & 0xC0) != 0x80)
++            return 1;
++    }
++    return len;
++}
++
++uint32_t utf8Decode(const std::string& text, size_t pos, size_t len) {
++    const unsigned char lead = static_cast<unsigned char>(text[pos]);
++    if (len == 1)
++        return lead;
++    uint32_t cp = lead & (len == 2 ? 0x1F : len == 3 ? 0x0F : 0x07);
++    for (size_t i = 1; i < len; ++i)
++        cp = (cp << 6) | (static_cast<unsigned char>(text[pos + i]) & 0x3F);
++    return cp;
++}
++
++// Animalese samples only exist for a-z and 0-9. Map every spoken character to
++// one of those so non-Latin text (Russian, accented letters...) is voiced too.
++// Returns 0 when the character should stay silent.
++char animaleseLetterFor(uint32_t cp) {
++    if (cp < 0x80) {
++        const unsigned char c = static_cast<unsigned char>(cp);
++        return std::isalnum(c) ? static_cast<char>(std::tolower(c)) : 0;
++    }
++
++    // Cyrillic: rough phonetic mapping (upper case folds onto lower case).
++    static constexpr char kCyrillic[32] = {
++        'a', 'b', 'v', 'g', 'd', 'e', 'j', 'z',  // а б в г д е ж з
++        'i', 'y', 'k', 'l', 'm', 'n', 'o', 'p',  // и й к л м н о п
++        'r', 's', 't', 'u', 'f', 'h', 'c', 'c',  // р с т у ф х ц ч
++        's', 's', 0,   'y', 0,   'e', 'u', 'a',  // ш щ ъ ы ь э ю я
++    };
++    if (cp >= 0x0410 && cp <= 0x042F)
++        return kCyrillic[cp - 0x0410];
++    if (cp >= 0x0430 && cp <= 0x044F)
++        return kCyrillic[cp - 0x0430];
++    if (cp == 0x0401 || cp == 0x0451) // Ё ё
++        return 'o';
++
++    // Other scripts and accented letters: stable pseudo-letter per character.
++    // Punctuation/symbols/emoji ranges stay silent.
++    if ((cp >= 0x00C0 && cp <= 0x024F) || (cp >= 0x0370 && cp <= 0x03FF)
++        || (cp >= 0x3040 && cp <= 0x9FFF) || (cp >= 0xAC00 && cp <= 0xD7AF))
++        return static_cast<char>('a' + (cp % 26));
++    return 0;
+ }
+ 
+ std::string utf8Codepoint(uint32_t cp) {
+@@ -197,12 +252,6 @@ void TutorialActivity::buildSteps() {
+             i18n.tr("tutorial.themes.body", "Themes can change colors, images, and sounds. Open Themes from the sidebar to install or apply a style."),
+             ""
+         },
+-        {
+-            StepKind::Text,
+-            i18n.tr("tutorial.cursor.title", "Cursor"),
+-            i18n.tr("tutorial.cursor.body", "You can use the virtual cursor with stick clicks when an action needs a pointer. Click the left stick to enable it, or the right stick to recenter it."),
+-            ""
+-        },
+         {
+             StepKind::Text,
+             i18n.tr("tutorial.support.title", "Support"),
+@@ -277,14 +326,15 @@ void TutorialActivity::buildUi() {
+     m_navCursor->moveTo({928.f, 352.f, 107.f, 41.f}, 16.f, 0.01f);
+ }
+ 
+-void TutorialActivity::playAnimaleseFor(char ch) {
++void TutorialActivity::playAnimaleseFor(uint32_t codepoint) {
+     if (m_accessibilityEnabled)
+         return;
+-    if (!isTextChar(ch))
++    const char letter = animaleseLetterFor(codepoint);
++    if (letter == 0)
+         return;
+ 
+     std::string id = "animalese_";
+-    id.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
++    id.push_back(letter);
+     m_audio.playNamedSfx(id);
+ }
+ 
+@@ -298,8 +348,13 @@ void TutorialActivity::updateTyping(float dt) {
+ 
+     m_charTimer -= dt;
+     while (m_charTimer <= 0.f && m_visibleChars < step.body.size()) {
+-        const char ch = step.body[m_visibleChars++];
+-        playAnimaleseFor(ch);
++        // m_visibleChars is a byte offset that always sits on a character
++        // boundary: reveal one whole UTF-8 character at a time.
++        const size_t len = utf8SequenceLength(step.body, m_visibleChars);
++        const uint32_t cp = utf8Decode(step.body, m_visibleChars, len);
++        m_visibleChars += len;
++        playAnimaleseFor(cp);
++        const char ch = cp < 0x80 ? static_cast<char>(cp) : '\0';
+         if (ch == '.' || ch == ':' || ch == ';')
+             m_charTimer += 0.15f;
+         else if (ch == ',' || ch == '!')
+diff --git a/projects/menu/src/tutorial/TutorialActivity.hpp b/projects/menu/src/tutorial/TutorialActivity.hpp
+index 8344908..8bae835 100644
+--- a/projects/menu/src/tutorial/TutorialActivity.hpp
++++ b/projects/menu/src/tutorial/TutorialActivity.hpp
+@@ -8,6 +8,7 @@
+ #include "widgets/WaraWaraBackground.hpp"
+ #include "core/AudioManager.hpp"
+ #include "core/AccessibilityManager.hpp"
++#include <cstdint>
+ #include <functional>
+ #include <memory>
+ #include <string>
+@@ -46,7 +47,7 @@ private:
+     void buildSteps();
+     void loadAnimaleseSfx();
+     void buildUi();
+-    void playAnimaleseFor(char ch);
++    void playAnimaleseFor(uint32_t codepoint);
+     void advanceStep();
+     void skipAll();
+     void finish();
+diff --git a/projects/menu/src/widgets/IconGrid.cpp b/projects/menu/src/widgets/IconGrid.cpp
+index 36b3d1d..5ea3134 100644
+--- a/projects/menu/src/widgets/IconGrid.cpp
++++ b/projects/menu/src/widgets/IconGrid.cpp
+@@ -346,9 +346,10 @@ nxui::Rect IconGrid::dynamicIconRect(int index, float* outScale,
+                                      float* outOpacity,
+                                      float* outDistance) const {
+     const float centerX = m_rect.x + m_rect.width * 0.5f;
+-    // Leave a dedicated control strip below the profiles, then place the app
+-    // carousel in the lower half of the HOME scene.
+-    const float centerY = m_rect.y + m_rect.height * 0.66f;
++    // The control strip sits at the top of the HOME scene; the carousel is
++    // centred vertically between it and the bottom hint area (it used to sit
++    // at 66 % of the grid height, which read as noticeably too low).
++    const float centerY = m_rect.y + m_rect.height * kLineCenterFraction;
+     const float offset = m_lineScrollOffset.value();
+     // Carousel sizing is intentionally independent from the configurable
+     // grid rows/columns. Changing the grid density must not resize single row.
+diff --git a/projects/menu/src/widgets/IconGrid.hpp b/projects/menu/src/widgets/IconGrid.hpp
+index 0378750..61a98b6 100644
+--- a/projects/menu/src/widgets/IconGrid.hpp
++++ b/projects/menu/src/widgets/IconGrid.hpp
+@@ -33,6 +33,10 @@ public:
+     void setLayoutMode(AppLayoutMode mode);
+     AppLayoutMode layoutMode() const { return m_layoutMode; }
+     bool isDynamicLine() const { return m_layoutMode == AppLayoutMode::DynamicLine; }
++    // Vertical centre of the single-row carousel as a fraction of the grid
++    // rect. 0.5 puts the focused icon on the middle of the screen (the grid
++    // rect is symmetric about y = 360). Shared with the folder plate geometry.
++    static constexpr float kLineCenterFraction = 0.5f;
+     bool isDynamicLineScrolling() const;
+     bool isLayoutMorphing() const { return m_layoutMorphing; }
+     void setDynamicLineUpTarget(nxui::Widget* target);
+diff --git a/projects/menu/src/widgets/LaunchAnimation.hpp b/projects/menu/src/widgets/LaunchAnimation.hpp
+index 3b78f7a..44f3ff5 100644
+--- a/projects/menu/src/widgets/LaunchAnimation.hpp
++++ b/projects/menu/src/widgets/LaunchAnimation.hpp
+@@ -52,8 +52,8 @@ private:
+     static constexpr float kMusicFadeDur = kZoomDur + kHoldDur + kFadeDur + kBlackDur;
+ 
+     // Resume: soft blackout only — no zoom or icon flare.
+-    static constexpr float kResumeFadeDur = 0.16f;
+-    static constexpr float kResumeHoldDur = 0.06f;
++    static constexpr float kResumeFadeDur = 0.12f;
++    static constexpr float kResumeHoldDur = 0.03f;
+     static constexpr float kResumeTotalDur = kResumeFadeDur + kResumeHoldDur;
+ 
+     nxui::Rect     m_from;
+diff --git a/projects/menu/src/widgets/OverlayDialog.cpp b/projects/menu/src/widgets/OverlayDialog.cpp
+index 98aff24..010cb07 100644
+--- a/projects/menu/src/widgets/OverlayDialog.cpp
++++ b/projects/menu/src/widgets/OverlayDialog.cpp
+@@ -333,16 +333,19 @@ void OverlayDialog::currentAccessibilityParts(std::string& context,
+         context += (context.empty() ? "" : ". ") + m_message;
+ 
+     if (m_mode == DialogMode::UserSelect) {
++        auto& i18n = nxui::I18n::instance();
+         std::string name;
+         if (m_selected >= 0 && m_selected < (int)m_users.size())
+             name = m_users[(size_t)m_selected].nickname;
+         if (name.empty())
+-            name = "Profil " + std::to_string(m_selected + 1);
++            name = i18n.tr("userselect.profile_fallback", "Profile") + " " + std::to_string(m_selected + 1);
+         summary = name;
+         if (m_accessibilitySpeakPosition && !m_users.empty())
+-            position = std::to_string(m_selected + 1) + " sur " + std::to_string((int)m_users.size());
++            position = std::to_string(m_selected + 1) + " " + i18n.tr("accessibility.position.of", "of")
++                     + " " + std::to_string((int)m_users.size());
+         if (m_accessibilitySpeakHints)
+-            summary += ". Gauche et droite pour changer de profil. A pour valider. B pour annuler.";
++            summary += ". " + i18n.tr("userselect.accessibility_hints",
++                "Left and right to change profile. A to confirm. B to cancel.");
+         return;
+     }
+ 
+@@ -400,10 +403,13 @@ void OverlayDialog::currentAccessibilityParts(std::string& context,
+     if (!choice.empty())
+         summary = choice;
+     if (m_accessibilitySpeakPosition && !m_buttons.empty())
+-        position = std::to_string(m_selected + 1) + " sur " + std::to_string((int)m_buttons.size());
++        position = std::to_string(m_selected + 1) + " "
++                 + nxui::I18n::instance().tr("accessibility.position.of", "of")
++                 + " " + std::to_string((int)m_buttons.size());
+     if (m_accessibilitySpeakHints) {
+         if (!summary.empty()) summary += ". ";
+-        summary += "Gauche et droite pour changer. A pour valider. B pour annuler.";
++        summary += nxui::I18n::instance().tr("accessibility.dialog_hints",
++            "Left and right to change. A to confirm. B to cancel.");
+     }
+ }
+ 
+diff --git a/projects/menu/src/widgets/QuickSettingsOverlay.cpp b/projects/menu/src/widgets/QuickSettingsOverlay.cpp
+index b5c46b6..f5344f6 100644
+--- a/projects/menu/src/widgets/QuickSettingsOverlay.cpp
++++ b/projects/menu/src/widgets/QuickSettingsOverlay.cpp
+@@ -1,4 +1,5 @@
+ #include "QuickSettingsOverlay.hpp"
++#include <nxui/core/Utf8.hpp>
+ #include "core/DebugLog.hpp"
+ 
+ #include <nxui/core/Renderer.hpp>
+@@ -233,7 +234,7 @@ static std::string ellipsize(nxui::Font* font, const std::string& text, float ma
+     const std::string ellipsis = "...";
+     std::string out = text;
+     while (!out.empty() && font->measure(out + ellipsis).x * scale > maxWidth)
+-        out.pop_back();
++        nxui::popUtf8Codepoint(out);
+     return out + ellipsis;
+ }
+ 
+@@ -1771,10 +1772,7 @@ void QuickSettingsOverlay::show() {
+     closePlaylist();
+     m_playlistAnim = 0.f;
+ 
+-    // L3/R3 are music shortcuts here — don't let Input's gyro pointer steal them.
+-    if (m_input)
+-        m_input->setVirtualPointerShortcutsEnabled(false);
+-
++    // L3/R3 are music shortcuts here.
+     refreshHardwareStatus();
+     refreshMusicState();
+     updateCursorTarget();
+@@ -1793,8 +1791,6 @@ void QuickSettingsOverlay::hide() {
+     m_coverFsPlaylistAnim = 0.f;
+     m_playlistEyeFocused = false;
+     m_playlistArtFocused = false;
+-    if (m_input)
+-        m_input->setVirtualPointerShortcutsEnabled(true);
+     setFocusable(false);
+     DebugLog::log("[quicksettings] hiding");
+ }
+@@ -3161,8 +3157,29 @@ void QuickSettingsOverlay::render(nxui::Renderer& ren) {
+                          primaryText, 0.82f);
+         }
+ 
++        // The ON/OFF label lives in the free half of the pill, opposite the knob.
++        // Localized labels (e.g. "ВЫКЛ") are wider than "OFF", so size the pill
++        // from the widest label and shrink the text if it still does not fit.
++        const std::string onStr = i18n.tr("quicksettings.on", "ON");
++        const std::string offStr = i18n.tr("quicksettings.off", "OFF");
++        const std::string stateStr = enabled ? onStr : offStr;
++        float stateScale = 0.65f;
++        const float pillH = 28.f;
++        const float labelPad = 8.f;
+         float pillW = 56.f;
+-        float pillH = 28.f;
++        if (m_smallFont) {
++            const float widest = std::max(m_smallFont->measure(onStr).x,
++                                          m_smallFont->measure(offStr).x);
++            pillW = std::max(pillW, pillH + widest * stateScale + labelPad * 2.f);
++            // Keep the pill from swallowing the row label.
++            const float maxPillW = std::max(56.f, card.width * 0.42f);
++            if (pillW > maxPillW) {
++                pillW = maxPillW;
++                const float room = pillW - pillH - labelPad * 2.f;
++                if (widest > 0.f)
++                    stateScale = std::min(stateScale, std::max(0.40f, room / widest));
++            }
++        }
+         nxui::Rect pill = {card.x + card.width - pillW - 12.f, card.y + (card.height - pillH) * 0.5f, pillW, pillH};
+         nxui::Color pillBg = enabled
+             ? nxui::Color(0.20f, 0.82f, 0.45f, 0.90f * alpha)
+@@ -3175,16 +3192,16 @@ void QuickSettingsOverlay::render(nxui::Renderer& ren) {
+                        nxui::Color(1.f, 1.f, 1.f, alpha));
+ 
+         if (m_smallFont) {
+-            std::string stateStr = enabled
+-                ? i18n.tr("quicksettings.on", "ON")
+-                : i18n.tr("quicksettings.off", "OFF");
+             nxui::Vec2 ssz = m_smallFont->measure(stateStr);
+-            float stx = enabled ? (pill.x + 8.f) : (pill.x + pill.width - ssz.x * 0.65f - 8.f);
+-            ren.drawText(stateStr, {stx, pill.y + (pillH - ssz.y * 0.65f) * 0.5f}, m_smallFont,
++            // Free area = pill minus the knob's slot, centered text inside it.
++            const float freeX = enabled ? pill.x : pill.x + pillH;
++            const float freeW = pill.width - pillH;
++            float stx = freeX + (freeW - ssz.x * stateScale) * 0.5f;
++            ren.drawText(stateStr, {stx, pill.y + (pillH - ssz.y * stateScale) * 0.5f}, m_smallFont,
+                          lightMode
+                             ? nxui::Color(0.04f, 0.05f, 0.07f, 0.95f * alpha)
+                             : nxui::Color(1.f, 1.f, 1.f, 0.95f * alpha),
+-                         0.65f);
++                         stateScale);
+         }
+     };
+ 
+@@ -3219,8 +3236,15 @@ void QuickSettingsOverlay::render(nxui::Renderer& ren) {
+             nxui::Vec2 lsz = m_smallFont->measure(label);
+             nxui::Color textColor = focused ? primaryText : secondaryText;
+             // Shared metrics so Sleep / Reboot / Power Off read as one family.
+-            const float textScale = kPowerTextScale;
+             const float iconGap = kPowerIconGap;
++            // Longer localized labels (e.g. "Перезагрузить") must stay inside
++            // the button: shrink the text just enough to fit.
++            const float padX = 10.f;
++            const float iconReserve = (pa == PowerAction::Sleep) ? 18.f : 22.f;
++            float textScale = kPowerTextScale;
++            const float availW = btn.width - padX * 2.f - iconReserve - iconGap;
++            if (lsz.x * textScale > availW && lsz.x > 0.f)
++                textScale = std::max(0.45f, availW / lsz.x);
+ 
+             if (pa == PowerAction::Sleep) {
+                 const float iconSlot = 18.f;
+diff --git a/projects/menu/src/widgets/SteamGridDbBackdrop.hpp b/projects/menu/src/widgets/SteamGridDbBackdrop.hpp
+index c6857b9..f858941 100644
+--- a/projects/menu/src/widgets/SteamGridDbBackdrop.hpp
++++ b/projects/menu/src/widgets/SteamGridDbBackdrop.hpp
+@@ -97,7 +97,7 @@ private:
+     AppLayoutMode m_layoutMode = AppLayoutMode::Grid;
+     // Band the logo is centred in while single-row mode is active. The app
+     // raises it above the folder title bubble when a folder is open.
+-    nxui::Rect m_logoArea{370.f, 149.f, 540.f, 150.f};
++    nxui::Rect m_logoArea{370.f, 100.f, 540.f, 146.f};
+     bool m_showPreviousDuringCrossfade = false;
+     nxui::AnimatedFloat m_fade{1.f};
+     nxui::AnimatedFloat m_artworkOpacity{1.f};
+diff --git a/romfs/i18n/de-DE.json b/romfs/i18n/de-DE.json
+index 8f34ab5..fb62d5c 100644
+--- a/romfs/i18n/de-DE.json
++++ b/romfs/i18n/de-DE.json
+@@ -238,7 +238,9 @@
+     }
+   },
+   "userselect": {
+-    "title": "Wer spielt?"
++    "title": "Wer spielt?",
++    "profile_fallback": "Profil",
++    "accessibility_hints": "Links und rechts, um das Profil zu wechseln. A zum Bestätigen. B zum Abbrechen."
+   },
+   "game": {
+     "move": "Verschieben",
+@@ -460,7 +462,8 @@
+     },
+     "position": {
+       "row": "Zeile",
+-      "column": "Spalte"
++      "column": "Spalte",
++      "of": "von"
+     },
+     "move_mode": {
+       "enter": "Spiel verschieben: ",
+@@ -470,7 +473,8 @@
+     "grid": {
+       "empty_slot": "Leeres Feld"
+     },
+-    "user_profile": "Benutzerprofil"
++    "user_profile": "Benutzerprofil",
++    "dialog_hints": "Links und rechts zum Wechseln. A zum Bestätigen. B zum Abbrechen."
+   },
+   "tutorial": {
+     "accessibility": {
+diff --git a/romfs/i18n/en-US.json b/romfs/i18n/en-US.json
+index 245be59..2de8a55 100644
+--- a/romfs/i18n/en-US.json
++++ b/romfs/i18n/en-US.json
+@@ -3,7 +3,9 @@
+     "auto": "Auto",
+     "na": "N/A",
+     "active": "Active",
+-    "disabled": "Disabled"
++    "disabled": "Disabled",
++    "loading": "Loading",
++    "none": "None"
+   },
+   "accessibility": {
+     "speech": {
+@@ -40,7 +42,8 @@
+       "progress": "progress",
+       "info": "information",
+       "section": "section",
+-      "widget": "widget"
++      "widget": "widget",
++      "folder": "folder"
+     },
+     "hints": {
+       "open": "A to open.",
+@@ -81,7 +84,8 @@
+     "position": {
+       "row": "row",
+       "column": "column",
+-      "item": "item"
++      "item": "item",
++      "of": "of"
+     },
+     "move_mode": {
+       "enter": "Moving game: ",
+@@ -91,7 +95,8 @@
+     "grid": {
+       "empty_slot": "Empty slot"
+     },
+-    "user_profile": "User profile"
++    "user_profile": "User profile",
++    "dialog_hints": "Left and right to change. A to confirm. B to cancel."
+   },
+   "tutorial": {
+     "header": "SwitchU tutorial",
+@@ -173,7 +178,16 @@
+     "artwork": "Art",
+     "place": "Place",
+     "modes": "Modes",
+-    "skip": "Skip"
++    "skip": "Skip",
++    "back": "Back",
++    "close": "Close",
++    "confirm": "Confirm",
++    "launch": "Launch",
++    "move": "Move",
++    "navigate": "Navigate",
++    "open": "Open",
++    "resume": "Resume",
++    "select": "Select"
+   },
+   "settings": {
+     "tabs": {
+@@ -309,7 +323,9 @@
+       "page_translate": "Translate",
+       "page_teleport": "Teleport",
+       "ui_wireframe": "UI Wireframe",
+-      "ui_wireframe_desc": "Show outlines of all Box widgets for layout debugging."
++      "ui_wireframe_desc": "Show outlines of all Box widgets for layout debugging.",
++      "grid_columns": "Home Grid Columns",
++      "grid_rows": "Home Grid Rows"
+     },
+     "internet": {
+       "wifi_ssid": "WiFi Network",
+@@ -355,7 +371,8 @@
+       "scan_cancelled": "Artwork scan cancelled.",
+       "https_clock_hint": "HTTPS failed. If the console clock is wrong, fix it in Settings > System - try Synchronize Clock via Public Servers.",
+       "search_failed": "Search failed. If HTTPS keeps failing, check the console clock in Settings > System.",
+-      "https_clock_title": "Couldn't reach SteamGridDB"
++      "https_clock_title": "Couldn't reach SteamGridDB",
++      "api_key_guide": "Enter your API key"
+     },
+     "controllers": {
+       "test": "Test Input Devices",
+@@ -412,7 +429,18 @@
+       "media_sleep": "Sleep While Playing Media",
+       "media_sleep_desc": "Allow the console to auto-sleep even during media playback.",
+       "wake_power": "Wake at Power State Change",
+-      "wake_power_desc": "Wake the console when the AC adapter is connected or disconnected."
++      "wake_power_desc": "Wake the console when the AC adapter is connected or disconnected.",
++      "auto_sleep": "Auto-Sleep",
++      "power_actions": "Power",
++      "reboot": "Reboot",
++      "reboot_confirm": "Restart the console?",
++      "reboot_desc": "Restart the console.",
++      "shutdown": "Shutdown",
++      "shutdown_confirm": "Power off the console?",
++      "shutdown_desc": "Completely power off the console.",
++      "sleep_confirm": "Put the console into sleep mode?",
++      "sleep_now": "Sleep",
++      "sleep_now_desc": "Put the console into sleep mode."
+     },
+     "theme": {
+       "preset": "Preset",
+@@ -467,7 +495,10 @@
+       "used": "Used",
+       "summary": "Summary",
+       "details": "Details",
+-      "delete": "Delete"
++      "delete": "Delete",
++      "homebrew_library_unavailable": "Installed software management is unavailable in homebrew mode.",
++      "manage_title": "Manage Software",
++      "title_id": "Title ID"
+     },
+     "about": {
+       "version": "Version",
+@@ -478,12 +509,15 @@
+       "acknowledgements_desc": "Thanks to xortroll for your help with your project uLaunch and for your support and advice during development.",
+       "source_code": "Source Code",
+       "source_code_value": "github.com/PoloNX/SwitchU"
+-    }
++    },
++    "loading_tab": "Loading this section in the background."
+   },
+   "userselect": {
+     "add_user": "Add user",
+     "add_user_hint": "A to create a new user.",
+-    "title": "Who's playing?"
++    "title": "Who's playing?",
++    "profile_fallback": "Profile",
++    "accessibility_hints": "Left and right to change profile. A to confirm. B to cancel."
+   },
+   "profilelock": {
+     "title": "Default profile",
+@@ -599,7 +633,9 @@
+     "custom_icon_desc": "Search SteamGridDB and use an icon.",
+     "custom_icon_set_desc": "SteamGridDB icon is active for this folder. Requires Show cover.",
+     "custom_icon_clear_desc": "Remove the custom SteamGridDB cover and use the first game again.",
+-    "items": "items"
++    "items": "items",
++    "move": "Move",
++    "page_added": "Page added"
+   },
+   "add": {
+     "title": "Add"
+@@ -681,7 +717,8 @@
+     "needs_verify": "Game data needs verification.",
+     "needs_update": "A required update is available.",
+     "no_contents": "Game data is missing.",
+-    "cannot_launch": "This game cannot be launched."
++    "cannot_launch": "This game cannot be launched.",
++    "operation_failed": "Operation failed"
+   },
+   "button": {
+     "ok": "OK",
+@@ -723,7 +760,9 @@
+       "sort_large_tiles": "Sort Large Tiles Too",
+       "sort_large_tiles_desc": "A-Z and Recent also move applications that use a larger tile size.",
+       "hint_panel": "Panel",
+-      "hint_capsules": "Capsules"
++      "hint_capsules": "Capsules",
++      "auto_theme": "Automatic Theme",
++      "auto_theme_desc": "Switch between a day theme and a night theme automatically."
+     },
+     "accessibility": {
+       "fullscreen_preview": "Fullscreen preview",
+@@ -814,10 +853,21 @@
+       "missing": "No screenshot",
+       "prev": "Prev",
+       "next": "Next"
++    },
++    "page": {
++      "next": "Next",
++      "prev": "Previous"
+     }
+   },
+   "page": {
+-    "minus_hint": "View · hold delete"
++    "minus_hint": "View · hold delete",
++    "delete": "Delete page",
++    "delete_message": "This page is empty. What would you like to remove?",
++    "delete_this": "Delete this page",
++    "delete_title": "Delete page",
++    "delete_unused": "Delete all unused pages",
++    "deleted": "Page deleted",
++    "unused_deleted": "Unused pages deleted"
+   },
+   "text_entry": {
+     "backspace": "←",
+@@ -870,6 +920,139 @@
+     "play_pause": "Play/Pause",
+     "repeat": "Repeat",
+     "shuffle": "Shuffle",
+-    "playlist": "Playlist"
+-  }
++    "playlist": "Playlist",
++    "playlist_empty": "No tracks"
++  },
++  "autotheme": {
++    "day_starts": "Day Starts At",
++    "day_theme": "Day Theme",
++    "day_theme_desc": "Applied during the day.",
++    "geo_locating": "Locating via internet...",
++    "geo_location": "Location",
++    "geo_midnight_sun": "Midnight sun",
++    "geo_polar_night": "Polar night",
++    "geo_sunrise": "Sunrise",
++    "geo_sunset": "Sunset",
++    "header": "Automatic Theme",
++    "header_mode": "Mode: ",
++    "mode": "Switching",
++    "mode_desc": "Off keeps your chosen theme. Manual uses fixed hours. Geolocation uses your approximate location (needs internet).",
++    "mode_geo": "Geolocation (IP)",
++    "mode_manual": "Manual hours",
++    "mode_off": "Off",
++    "night_starts": "Night Starts At",
++    "night_theme": "Night Theme",
++    "night_theme_desc": "Applied during the night.",
++    "section": {
++      "geo": "Geolocation",
++      "mode": "Mode",
++      "schedule": "Schedule",
++      "themes": "Themes"
++    },
++    "summary": {
++      "geo": "Geolocation (IP)",
++      "manual": "Manual hours",
++      "off": "Off"
++    },
++    "title": "Auto Theme"
++  },
++  "manager": {
++    "applying": "Applying the change safely...",
++    "cancel": "Cancel",
++    "check_updates": "Check for updates",
++    "confirm_disable_title": "Disable SwitchU?",
++    "confirm_enable_title": "Enable SwitchU?",
++    "confirm_toggle_message": "The change will take effect after a restart.",
++    "conflict": "Both enabled and disabled override files exist. Resolve the installation manually.",
++    "disable": "Disable SwitchU",
++    "disabled_detail": "The original Nintendo HOME menu is configured for this boot.",
++    "do_not_close": "Do not close the application.",
++    "enable": "Enable SwitchU",
++    "enabled_detail": "The SwitchU HOME menu is configured for this boot.",
++    "error_commit": "The SD card could not be synchronized. The change was rolled back.",
++    "error_invalid": "The installation state changed. No action was taken.",
++    "error_payload": "The SwitchU menu payload is incomplete. Activation was cancelled.",
++    "error_reboot": "The console could not be restarted. The configuration change is still saved.",
++    "error_rename": "The Atmosphere override could not be renamed.",
++    "error_rollback": "Rollback failed. Check the SwitchU override files before restarting.",
++    "error_title": "Operation failed",
++    "error_unknown": "An unexpected error occurred.",
++    "error_verify": "The change could not be verified and was rolled back.",
++    "help": "D-pad / stick: navigate  •  A: confirm  •  B: quit",
++    "help_restart": "A: confirm  •  B: later",
++    "later": "Later",
++    "missing": "SwitchU's Atmosphere override was not found on the SD card.",
++    "next_boot_disabled": "SwitchU will be disabled after the next restart.",
++    "next_boot_enabled": "SwitchU will be enabled after the next restart.",
++    "no_change": "No unrelated data was modified.",
++    "ok": "OK",
++    "operation_blocked": "Operation blocked for safety",
++    "reboot": "Restart",
++    "reboot_confirm_message": "Close any other software and save your work before restarting.",
++    "reboot_confirm_title": "Restart the console?",
++    "reboot_now": "Restart now",
++    "restart_required": "Restart required",
++    "status_disabled": "SwitchU disabled",
++    "status_enabled": "SwitchU enabled",
++    "status_unknown": "SwitchU state unavailable",
++    "subtitle": "Manage the HOME menu used on the next boot.",
++    "title": "SwitchU Manager",
++    "up_to_date": "Up to date",
++    "update_available": "A new SwitchU version is available: ",
++    "update_check_failed": "Update check failed. You can retry.",
++    "update_checking": "Checking the latest GitHub release...",
++    "update_checking_button": "Checking for updates...",
++    "update_confirm_message": "Download and install SwitchU ",
++    "update_confirm_suffix": " from GitHub? Your configuration and themes will be preserved.",
++    "update_confirm_title": "Install SwitchU update?",
++    "update_download": "Download",
++    "update_error_title": "Update failed",
++    "update_install": "Install update",
++    "update_installation": "Installation",
++    "update_installing": "Downloading and installing the SwitchU update...",
++    "update_preparing": "Preparing update...",
++    "update_progress_title": "Installing SwitchU update",
++    "update_retry": "Retry update check",
++    "update_stage_downloading": "Downloading update...",
++    "update_stage_extracting": "Preparing installation...",
++    "update_stage_installing": "Installing files...",
++    "update_stage_verifying": "Verifying download...",
++    "update_to": "Update to ",
++    "updating": "Updating..."
++  },
++  "sgdb_picker": {
++    "no_games": "No games found",
++    "games_pick": "{} games — pick one",
++    "choices_for": "{} choices for {}",
++    "kind_icon": "Icon",
++    "search": "Search",
++    "change_name": "X  Change name",
++    "search_failed_title": "Search failed",
++    "hint_error": "B Back   X Try another search",
++    "hint_games": "A Choose game   B Back   X Search",
++    "hint_art_back": "A Apply   B Back   X Search   Page {}/{}",
++    "hint_art_games": "A Apply   B Games   X Search   Page {}/{}",
++    "loading_for": "Loading artwork for {}...",
++    "applying": "Applying selection..."
++  },
++  "controllers.title": "Controllers",
++  "controllers.disconnected": "Not connected",
++  "controllers.handheld": "Handheld mode",
++  "controllers.pro": "Pro Controller",
++  "controllers.joycon_pair": "Joy-Con (L + R)",
++  "controllers.joycon_l": "Joy-Con (L)",
++  "controllers.joycon_r": "Joy-Con (R)",
++  "controllers.gamecube": "GameCube controller",
++  "controllers.poke_ball": "Poke Ball Plus",
++  "controllers.other": "Other controller",
++  "controllers.player": "Player",
++  "controllers.handheld_slot": "Handheld",
++  "controllers.swapped": "Player order changed",
++  "controllers.swap_failed": "Could not change order",
++  "controllers.grip_horizontal": "Joy-Con grip: horizontal (sideways)",
++  "controllers.grip_vertical": "Joy-Con grip: vertical (single Joy-Con)",
++  "controllers.grip_horizontal_short": "Grip: horizontal",
++  "controllers.grip_vertical_short": "Grip: vertical",
++  "controllers.footer": "↑↓ Select   Y: Swap with next   X: Grip   +: Pair new   −: Test   B: Close",
++  "controllers.opened": "Controllers. Up and Down select a player, Y swaps with the next player, X changes grip, Plus pairs a new controller, Minus tests input, B closes."
+ }
+diff --git a/romfs/i18n/es-ES.json b/romfs/i18n/es-ES.json
+index c186c27..79f7adf 100644
+--- a/romfs/i18n/es-ES.json
++++ b/romfs/i18n/es-ES.json
+@@ -74,7 +74,26 @@
+       "month": "Mes",
+       "day": "Día",
+       "hour": "Hora",
+-      "minute": "Minuto"
++      "minute": "Minuto",
++      "timezone_button": "Cambiar",
++      "timezone_desc": "Elige una zona horaria.",
++      "timezone_filter_title": "Filtrar zonas horarias",
++      "timezone_filter_guide": "Escribe para filtrar (p. ej., New_York). Déjalo vacío para ver todas.",
++      "timezone_filter_option": "Buscar",
++      "timezone_popup_hint": "Izquierda para buscar. Arriba/abajo para elegir. A para confirmar.",
++      "timezone_popup_footer": "A Confirmar   ·   B Cancelar",
++      "timezone_none": "No hay zonas horarias que coincidan.",
++      "timezone_failed": "No se pudo cambiar la zona horaria.",
++      "timezone_saved": "Zona horaria actualizada.",
++      "web_time": "Sincronizar reloj mediante servidores públicos",
++      "web_time_desc": "Ajusta el reloj mediante HTTPS público (funciona con bloqueo de DNS)",
++      "web_time_button": "Sincronizar ahora",
++      "web_time_working": "Sincronizando el reloj desde la web...",
++      "web_time_busy": "La sincronización del reloj ya está en curso.",
++      "web_time_failed": "No se pudo sincronizar el reloj desde la web.",
++      "web_time_saved": "Reloj sincronizado desde la web.",
++      "manual_time_disable_sync_title": "¿Desactivar la sincronización del reloj?",
++      "manual_time_disable_sync_msg": "Se desactivará la sincronización. ¿Continuar?"
+     },
+     "audio": {
+       "speaker_auto_mute": "Auto-mute de altavoces",
+@@ -314,14 +333,18 @@
+       "cancelling": "Cancelando...",
+       "scan_cancelled": "Búsqueda de arte cancelada.",
+       "api_key_guide": "Ingrese su clave de API",
+-      "search_failed": "La búsqueda falló. Si HTTPS sigue fallando, revisa el reloj de la consola en Ajustes > Sistema."
++      "search_failed": "La búsqueda falló. Si HTTPS sigue fallando, revisa el reloj de la consola en Ajustes > Sistema.",
++      "https_clock_hint": "Falló HTTPS. Si el reloj de la consola es incorrecto, corrígelo en Ajustes > Sistema; prueba «Sincronizar reloj mediante servidores públicos».",
++      "https_clock_title": "No se pudo conectar con SteamGridDB"
+     },
+     "loading_tab": "Cargando esta sección en segundo plano."
+   },
+   "userselect": {
+     "title": "¿Quién está jugando?",
+     "add_user": "Añadir usuario",
+-    "add_user_hint": "A para crear un usuario nuevo."
++    "add_user_hint": "A para crear un usuario nuevo.",
++    "profile_fallback": "Perfil",
++    "accessibility_hints": "Izquierda y derecha para cambiar de perfil. A para confirmar. B para cancelar."
+   },
+   "game": {
+     "move": "Mover",
+@@ -635,7 +658,8 @@
+     "position": {
+       "row": "fila",
+       "column": "columna",
+-      "item": "elemento"
++      "item": "elemento",
++      "of": "de"
+     },
+     "move_mode": {
+       "enter": "Moviendo juego: ",
+@@ -649,7 +673,8 @@
+     "layout": {
+       "grid": "Modo cuadrícula",
+       "dynamic_line": "Modo línea dinámica"
+-    }
++    },
++    "dialog_hints": "Izquierda y derecha para cambiar. A para confirmar. B para cancelar."
+   },
+   "tutorial": {
+     "accessibility": {
+diff --git a/romfs/i18n/fr-FR.json b/romfs/i18n/fr-FR.json
+index fd0d7bc..8053c74 100644
+--- a/romfs/i18n/fr-FR.json
++++ b/romfs/i18n/fr-FR.json
+@@ -71,7 +71,8 @@
+       "slider_actions": "Gauche ou droite pour ajuster. B pour revenir aux onglets.",
+       "selector_actions": "A ou droite pour ouvrir la liste. B pour revenir aux onglets.",
+       "action_actions": "A pour lancer l'action. B pour revenir aux onglets.",
+-      "companion_actions": "A pour activer. Droite pour la liste. B pour fermer."
++      "companion_actions": "A pour activer. Droite pour la liste. B pour fermer.",
++      "action_secondary_actions": "Gauche et droite pour choisir Sélectionner ou Effacer. A pour activer. B pour revenir aux onglets."
+     },
+     "value": {
+       "label": "Valeur",
+@@ -80,7 +81,8 @@
+     "position": {
+       "row": "ligne",
+       "column": "colonne",
+-      "item": "élément"
++      "item": "élément",
++      "of": "sur"
+     },
+     "move_mode": {
+       "enter": "Déplacement du jeu: ",
+@@ -90,7 +92,8 @@
+     "grid": {
+       "empty_slot": "Emplacement vide"
+     },
+-    "user_profile": "Profil utilisateur"
++    "user_profile": "Profil utilisateur",
++    "dialog_hints": "Gauche et droite pour changer. A pour valider. B pour annuler."
+   },
+   "tutorial": {
+     "header": "Tutoriel SwitchU",
+@@ -167,7 +170,12 @@
+     "sort_alpha": "A-Z",
+     "sort_recent": "Récents",
+     "modes": "Modes",
+-    "skip": "Passer"
++    "skip": "Passer",
++    "cancel_b": "B Annuler",
++    "cancel": "Annuler",
++    "fullscreen": "Plein écran",
++    "artwork": "Visuel",
++    "place": "Placer"
+   },
+   "settings": {
+     "tabs": {
+@@ -341,7 +349,15 @@
+       "download_start": "Recherche sur SteamGridDB...",
+       "https_clock_hint": "Echec HTTPS. Si l'horloge de la console est incorrecte, corrigez-la dans Parametres > Systeme - essayez Synchroniser l'horloge via des serveurs publics.",
+       "search_failed": "Echec de la recherche. Si HTTPS echoue encore, verifiez l'horloge dans Parametres > Systeme.",
+-      "https_clock_title": "Impossible d'atteindre SteamGridDB"
++      "https_clock_title": "Impossible d'atteindre SteamGridDB",
++      "show_grid": "Afficher dans le menu en grille",
++      "show_grid_desc": "Image de fond derrière la grille HOME standard.",
++      "show_line": "Afficher dans le menu sur une ligne",
++      "show_line_desc": "Image de fond et logo derrière le carrousel sur une ligne.",
++      "show_folders": "Afficher dans les dossiers",
++      "show_folders_desc": "Visuels lors de la navigation dans un dossier ouvert.",
++      "cancelling": "Annulation...",
++      "scan_cancelled": "Recherche de visuels annulée."
+     },
+     "controllers": {
+       "test": "Tester les périphériques",
+@@ -469,7 +485,9 @@
+   "userselect": {
+     "add_user": "Ajouter un utilisateur",
+     "add_user_hint": "A pour créer un nouvel utilisateur.",
+-    "title": "Qui joue ?"
++    "title": "Qui joue ?",
++    "profile_fallback": "Profil",
++    "accessibility_hints": "Gauche et droite pour changer de profil. A pour valider. B pour annuler."
+   },
+   "profilelock": {
+     "title": "Profil par défaut",
+@@ -519,7 +537,10 @@
+       "logo": "Logo",
+       "logo_desc": "Ouvre la galerie des logos pour choisir l'image à utiliser.",
+       "icon": "Icône de remplacement",
+-      "icon_desc": "Ouvre la galerie des icônes pour remplacer celle du jeu."
++      "icon_desc": "Ouvre la galerie des icônes pour remplacer celle du jeu.",
++      "clear_desc": "Supprime la personnalisation SteamGridDB et rétablit celle par défaut.",
++      "cleared": "Visuel SteamGridDB supprimé.",
++      "nothing_to_clear": "Aucun visuel SteamGridDB à supprimer."
+     }
+   },
+   "folder": {
+@@ -567,7 +588,22 @@
+     "size_small": "Petit",
+     "size_medium": "Moyen",
+     "size_large": "Grand",
+-    "items": "éléments"
++    "items": "éléments",
++    "style": "Style des dossiers",
++    "style_desc": "Change l'apparence (de tous les dossiers)",
++    "style_classic": "Classique",
++    "style_simple": "Simple",
++    "style_minimal": "Minimal",
++    "style_tab": "Onglet",
++    "style_ring": "Anneau",
++    "style_manila": "Manille",
++    "style_label": "Étiquette",
++    "show_cover": "Afficher la couverture",
++    "show_cover_desc": "Affiche l'icône de la première application sur les dossiers.",
++    "custom_icon": "Icône de couverture personnalisée",
++    "custom_icon_desc": "Cherche sur SteamGridDB et utilise une icône.",
++    "custom_icon_set_desc": "Une icône SteamGridDB est active pour ce dossier. Nécessite « Afficher la couverture ».",
++    "custom_icon_clear_desc": "Supprime la couverture SteamGridDB personnalisée et réutilise le premier jeu."
+   },
+   "add": {
+     "title": "Ajouter"
+@@ -668,7 +704,9 @@
+     "search": "Rechercher",
+     "manage": "Gérer",
+     "stop": "Arrêter",
+-    "pair": "Associer"
++    "pair": "Associer",
++    "none": "Aucun",
++    "clear_x": "×"
+   },
+   "themeshop": {
+     "source": {
+@@ -803,7 +841,9 @@
+     "space": "Espace",
+     "style_flat": "Clavier plat",
+     "style_glass": "Clavier verre",
+-    "symbols": "?12#"
++    "symbols": "?12#",
++    "backspace": "←",
++    "caps": "MAJ"
+   },
+   "quicksettings": {
+     "title": "Paramètres rapides",
+@@ -827,6 +867,13 @@
+     "power_off": "Éteindre",
+     "hint_adjust": "Ajuster",
+     "hint_shortcut": "Paramètres rapides",
+-    "music_idle": "Aucune lecture"
++    "music_idle": "Aucune lecture",
++    "music_empty": "Aucune musique chargée",
++    "prev": "Préc.",
++    "next": "Suiv.",
++    "play_pause": "Lecture/Pause",
++    "repeat": "Répéter",
++    "shuffle": "Aléatoire",
++    "playlist": "Playlist"
+   }
+ }
+diff --git a/romfs/i18n/it-IT.json b/romfs/i18n/it-IT.json
+index 5a53358..227bc66 100644
+--- a/romfs/i18n/it-IT.json
++++ b/romfs/i18n/it-IT.json
+@@ -238,7 +238,9 @@
+     }
+   },
+   "userselect": {
+-    "title": "Chi sta giocando?"
++    "title": "Chi sta giocando?",
++    "profile_fallback": "Profilo",
++    "accessibility_hints": "Sinistra e destra per cambiare profilo. A per confermare. B per annullare."
+   },
+   "game": {
+     "move": "Sposta",
+@@ -460,7 +462,8 @@
+     },
+     "position": {
+       "row": "riga",
+-      "column": "colonna"
++      "column": "colonna",
++      "of": "di"
+     },
+     "move_mode": {
+       "enter": "Spostamento gioco: ",
+@@ -470,7 +473,8 @@
+     "grid": {
+       "empty_slot": "Casella vuota"
+     },
+-    "user_profile": "Profilo utente"
++    "user_profile": "Profilo utente",
++    "dialog_hints": "Sinistra e destra per cambiare. A per confermare. B per annullare."
+   },
+   "tutorial": {
+     "accessibility": {
+diff --git a/romfs/i18n/nl-NL.json b/romfs/i18n/nl-NL.json
+index 54d8e97..40a8ae0 100644
+--- a/romfs/i18n/nl-NL.json
++++ b/romfs/i18n/nl-NL.json
+@@ -238,7 +238,9 @@
+     }
+   },
+   "userselect": {
+-    "title": "Wie speelt er?"
++    "title": "Wie speelt er?",
++    "profile_fallback": "Profiel",
++    "accessibility_hints": "Links en rechts om van profiel te wisselen. A om te bevestigen. B om te annuleren."
+   },
+   "game": {
+     "move": "Verplaatsen",
+@@ -460,7 +462,8 @@
+     },
+     "position": {
+       "row": "rij",
+-      "column": "kolom"
++      "column": "kolom",
++      "of": "van"
+     },
+     "move_mode": {
+       "enter": "Spel verplaatsen: ",
+@@ -470,7 +473,8 @@
+     "grid": {
+       "empty_slot": "Leeg vak"
+     },
+-    "user_profile": "Gebruikersprofiel"
++    "user_profile": "Gebruikersprofiel",
++    "dialog_hints": "Links en rechts om te wisselen. A om te bevestigen. B om te annuleren."
+   },
+   "tutorial": {
+     "accessibility": {
+diff --git a/romfs/i18n/pt-BR.json b/romfs/i18n/pt-BR.json
+index a4beebb..a3715fd 100644
+--- a/romfs/i18n/pt-BR.json
++++ b/romfs/i18n/pt-BR.json
+@@ -238,7 +238,9 @@
+     }
+   },
+   "userselect": {
+-    "title": "Quem vai jogar?"
++    "title": "Quem vai jogar?",
++    "profile_fallback": "Perfil",
++    "accessibility_hints": "Esquerda e direita para trocar de perfil. A para confirmar. B para cancelar."
+   },
+   "game": {
+     "move": "Mover",
+@@ -460,7 +462,8 @@
+     },
+     "position": {
+       "row": "linha",
+-      "column": "coluna"
++      "column": "coluna",
++      "of": "de"
+     },
+     "move_mode": {
+       "enter": "Movendo jogo: ",
+@@ -470,7 +473,8 @@
+     "grid": {
+       "empty_slot": "Espaço vazio"
+     },
+-    "user_profile": "Perfil de usuário"
++    "user_profile": "Perfil de usuário",
++    "dialog_hints": "Esquerda e direita para alternar. A para confirmar. B para cancelar."
+   },
+   "tutorial": {
+     "accessibility": {
+diff --git a/romfs/i18n/ru-RU.json b/romfs/i18n/ru-RU.json
+index 20a705e..4ad82e4 100644
+--- a/romfs/i18n/ru-RU.json
++++ b/romfs/i18n/ru-RU.json
+@@ -3,7 +3,9 @@
+     "auto": "Авто",
+     "na": "Н/Д",
+     "active": "Активно",
+-    "disabled": "Выключено"
++    "disabled": "Выключено",
++    "loading": "Загрузка",
++    "none": "Нет"
+   },
+   "sidebar": {
+     "album": "Альбом",
+@@ -27,7 +29,8 @@
+       "theme": "Тема",
+       "storage": "Хранилище",
+       "about": "О программе",
+-      "accessibility": "Доступность"
++      "accessibility": "Доступность",
++      "steamgriddb": "SteamGridDB"
+     },
+     "system": {
+       "firmware": "Версия прошивки",
+@@ -54,7 +57,43 @@
+       "auto_update": "Автообновление",
+       "error_reporting": "Отправка ошибок",
+       "clock_12h": "12-часовой формат",
+-      "clock_12h_desc": "Показывать время в 12-часовом формате."
++      "clock_12h_desc": "Показывать время в 12-часовом формате.",
++      "internet_time": "Синхронизировать часы через серверы Nintendo",
++      "internet_time_desc": "Установка времени через Nintendo (не работает при блокировке DNS)",
++      "manual_time": "Установить дату и время",
++      "manual_time_desc": "Задайте время вручную. Если синхронизация включена, она будет выключена.",
++      "manual_time_button": "Изменить",
++      "manual_time_guide": "Формат: ГГГГ-ММ-ДД ЧЧ:ММ",
++      "manual_time_popup_hint": "Влево/вправо — выбор поля. Вверх/вниз — изменение значения.",
++      "manual_time_footer": "A Подтвердить   ·   B Отмена",
++      "manual_time_saved": "Дата и время обновлены.",
++      "manual_time_invalid": "Введите корректную дату в формате ГГГГ-ММ-ДД ЧЧ:ММ.",
++      "disable_internet_time_first": "Сначала выключите синхронизацию часов через интернет.",
++      "time_change_failed": "Не удалось изменить дату и время.",
++      "year": "Год",
++      "month": "Месяц",
++      "day": "День",
++      "hour": "Час",
++      "minute": "Минута",
++      "timezone_button": "Изменить",
++      "timezone_desc": "Выберите часовой пояс.",
++      "timezone_filter_title": "Фильтр часовых поясов",
++      "timezone_filter_guide": "Введите для фильтра (например, New_York). Оставьте пустым, чтобы показать все.",
++      "timezone_filter_option": "Поиск",
++      "timezone_popup_hint": "Влево — поиск. Вверх/вниз — выбор. A — подтвердить.",
++      "timezone_popup_footer": "A Подтвердить   ·   B Отмена",
++      "timezone_none": "Подходящих часовых поясов нет.",
++      "timezone_failed": "Не удалось изменить часовой пояс.",
++      "timezone_saved": "Часовой пояс обновлён.",
++      "web_time": "Синхронизировать часы через публичные серверы",
++      "web_time_desc": "Установка времени через публичный HTTPS (работает при блокировке DNS)",
++      "web_time_button": "Синхронизировать",
++      "web_time_working": "Синхронизация часов через интернет...",
++      "web_time_busy": "Синхронизация часов уже выполняется.",
++      "web_time_failed": "Не удалось синхронизировать часы через интернет.",
++      "web_time_saved": "Часы синхронизированы через интернет.",
++      "manual_time_disable_sync_title": "Выключить синхронизацию часов?",
++      "manual_time_disable_sync_msg": "Синхронизация будет выключена. Продолжить?"
+     },
+     "audio": {
+       "speaker_auto_mute": "Автоматическое отключение динамиков",
+@@ -96,7 +135,9 @@
+       "page_translate": "Плавно",
+       "page_teleport": "Мгновенно",
+       "ui_wireframe": "Каркас интерфейса",
+-      "ui_wireframe_desc": "Показывает контуры всех Box для отладки макета."
++      "ui_wireframe_desc": "Показывает контуры всех Box для отладки макета.",
++      "grid_columns": "Столбцов в сетке HOME",
++      "grid_rows": "Строк в сетке HOME"
+     },
+     "internet": {
+       "wifi_ssid": "WiFi-сеть",
+@@ -114,7 +155,13 @@
+       "vibration": "Вибрация",
+       "usb_wired": "Проводное USB-соединение",
+       "usb_wired_desc": "Использовать проводной режим для снижения задержки на совместимых контроллерах.",
+-      "nfc": "NFC (amiibo)"
++      "nfc": "NFC (amiibo)",
++      "test": "Проверка устройств ввода",
++      "test_desc": "Проверьте стики, кнопки и сенсорный экран.",
++      "pairing": "Смена хвата/порядка",
++      "pairing_desc": "Подключение контроллеров и смена порядка игроков.",
++      "remapping": "Изменить назначение кнопок",
++      "remapping_desc": "Открыть системное средство назначения кнопок контроллера."
+     },
+     "bluetooth": {
+       "bluetooth": "Bluetooth",
+@@ -132,8 +179,10 @@
+       "unpair": "Разорвать связь",
+       "pair_connect": "Сопрячь и подключить",
+       "device_actions": "Действия с устройством",
+-      "connected": "Connected",
+-      "not_connected": "Not connected"
++      "connected": "Подключено",
++      "not_connected": "Не подключено",
++      "search_inactive": "Поиск устройств",
++      "search_active": "Идёт поиск устройств"
+     },
+     "sleep": {
+       "1min": "1 мин",
+@@ -154,7 +203,21 @@
+       "media_sleep": "Сон при воспроизведении медиа",
+       "media_sleep_desc": "Разрешить автосон во время воспроизведения медиа.",
+       "wake_power": "Пробуждение при питании",
+-      "wake_power_desc": "Пробуждать консоль при подключении или отключении адаптера питания."
++      "wake_power_desc": "Пробуждать консоль при подключении или отключении адаптера питания.",
++      "sleep_now_title": "Режим сна",
++      "shutdown_title": "Выключение",
++      "reboot_title": "Перезагрузка консоли",
++      "auto_sleep": "Автоматический сон",
++      "power_actions": "Питание",
++      "reboot": "Перезагрузка",
++      "reboot_confirm": "Перезагрузить консоль?",
++      "reboot_desc": "Перезагрузить консоль.",
++      "shutdown": "Выключение",
++      "shutdown_confirm": "Выключить консоль?",
++      "shutdown_desc": "Полностью выключить консоль.",
++      "sleep_confirm": "Перевести консоль в режим сна?",
++      "sleep_now": "Сон",
++      "sleep_now_desc": "Перевести консоль в режим сна."
+     },
+     "theme": {
+       "preset": "Пресет",
+@@ -209,7 +272,10 @@
+       "used": "Использовано",
+       "summary": "Сводка",
+       "details": "Подробности",
+-      "delete": "Удалить"
++      "delete": "Удалить",
++      "homebrew_library_unavailable": "Управление установленным ПО недоступно в режиме homebrew.",
++      "manage_title": "Управление ПО",
++      "title_id": "Title ID"
+     },
+     "about": {
+       "version": "Версия",
+@@ -235,17 +301,90 @@
+       "repeat_context_desc": "Повторяет текущую область при каждом смещении фокуса.",
+       "speak_position": "Читать позицию",
+       "speak_position_desc": "Читает строку, столбец и позицию, если доступно."
+-    }
++    },
++    "steamgriddb": {
++      "section": "Обложки игр",
++      "enabled": "Показывать обложки SteamGridDB",
++      "enabled_desc": "Выберите ниже, где показывать обложки.",
++      "show_grid": "Показывать в меню-сетке",
++      "show_grid_desc": "Фоновое изображение за стандартной сеткой HOME.",
++      "show_line": "Показывать в однострочном меню",
++      "show_line_desc": "Фон и логотип за однострочной каруселью.",
++      "show_folders": "Показывать внутри папок",
++      "show_folders_desc": "Обложки при просмотре игр внутри открытой папки.",
++      "api_key": "Ключ API",
++      "api_key_set": "Настроен (скрыт)",
++      "api_key_missing": "Не настроен",
++      "scan": "Найти недостающие обложки",
++      "scan_desc": "Загрузить фон и логотип для игр, у которых нет обложек.",
++      "already_running": "Поиск уже выполняется.",
++      "need_key": "Сначала укажите ключ API.",
++      "progress": "Поиск обложек",
++      "idle": "Готово к поиску по установленным приложениям.",
++      "results": "Результаты",
++      "no_results": "Поиск ещё не завершён",
++      "keyboard_error": "Не удалось открыть клавиатуру.",
++      "key_cleared": "Ключ API удалён.",
++      "key_saved": "Ключ API сохранён.",
++      "start_failed": "Не удалось начать поиск обложек.",
++      "started": "Поиск в SteamGridDB начат.",
++      "download_title": "Загрузка обложек",
++      "download_start": "Поиск в SteamGridDB...",
++      "cancelling": "Отмена...",
++      "scan_cancelled": "Поиск обложек отменён.",
++      "https_clock_hint": "Ошибка HTTPS. Если часы консоли неверны, исправьте их в Настройки > Система — попробуйте «Синхронизировать часы через публичные серверы».",
++      "search_failed": "Поиск не удался. Если ошибки HTTPS повторяются, проверьте часы консоли в Настройки > Система.",
++      "https_clock_title": "Не удалось связаться с SteamGridDB",
++      "api_key_guide": "Введите ваш ключ API"
++    },
++    "loading_tab": "Раздел загружается в фоновом режиме."
+   },
+   "userselect": {
+-    "title": "Кто играет?"
++    "title": "Кто играет?",
++    "add_user": "Добавить пользователя",
++    "add_user_hint": "A — создать нового пользователя.",
++    "profile_fallback": "Профиль",
++    "accessibility_hints": "Влево и вправо — сменить профиль. A — подтвердить. B — отмена."
+   },
+   "game": {
+     "move": "Переместить",
+     "move_prefix": "Переместить: ",
+     "close_title": "Закрыть игру",
+     "close_prefix": "Закрыть",
+-    "close_suffix": "?\nНесохраненный прогресс будет потерян."
++    "close_suffix": "?\nНесохраненный прогресс будет потерян.",
++    "tile_size": "Размер плитки",
++    "tile_size_desc": "Меняет размер этой игры в сетке.",
++    "options": "Параметры программы",
++    "data_management": "Управление данными",
++    "information": "Информация",
++    "move_title": "Переместить программу",
++    "move_desc": "Переместить эту программу на другую позицию в меню HOME.",
++    "version": "Версия",
++    "version_unknown": "Неизвестно",
++    "publisher_unknown": "Издатель неизвестен",
++    "title_id": "Title ID",
++    "delete_software": "Удалить программу",
++    "delete_software_desc": "Удаляет программу с консоли. Данные сохранений не удаляются.",
++    "delete_gamecard_unavailable": "Программу с игровой карты нельзя удалить с консоли.",
++    "delete_confirmation": "Программа будет удалена. Сохранения останутся.",
++    "close_desc": "Закрыть запущенную программу. Несохранённый прогресс может быть потерян.",
++    "uninstall": "Удалить",
++    "uninstall_title": "Удаление программы",
++    "uninstall_prefix": "Безвозвратно удалить",
++    "uninstall_failed": "Не удалось удалить",
++    "uninstall_progress_title": "Удаление программы",
++    "uninstall_progress": "Подождите. Не выключайте консоль.",
++    "steamgriddb": {
++      "hero": "Фон",
++      "hero_desc": "Выберите фоновое изображение.",
++      "logo": "Логотип",
++      "logo_desc": "Выберите логотип.",
++      "icon": "Заменить значок",
++      "icon_desc": "Выберите значок.",
++      "clear_desc": "Удалить замену из SteamGridDB и вернуть стандартную.",
++      "cleared": "Обложка SteamGridDB удалена.",
++      "nothing_to_clear": "Нет обложек SteamGridDB для удаления."
++    }
+   },
+   "power": {
+     "title": "Питание",
+@@ -278,14 +417,29 @@
+     "needs_verify": "Данные игры требуют проверки.",
+     "needs_update": "Доступно обязательное обновление.",
+     "no_contents": "Данные игры отсутствуют.",
+-    "cannot_launch": "Эту игру невозможно запустить."
++    "cannot_launch": "Эту игру невозможно запустить.",
++    "operation_failed": "Операция не удалась"
+   },
+   "button": {
+     "ok": "OK",
+     "cancel": "Отмена",
+     "delete": "Удалить",
+-    "close": "Close",
+-    "replace": "Replace"
++    "close": "Закрыть",
++    "replace": "Заменить",
++    "move": "Переместить",
++    "uninstall": "Удалить",
++    "select": "Выбрать",
++    "none": "Нет",
++    "clear_x": "×",
++    "open": "Открыть",
++    "rename": "Переименовать",
++    "connect": "Подключить",
++    "test": "Проверить",
++    "configure": "Настроить",
++    "search": "Найти",
++    "manage": "Управлять",
++    "stop": "Остановить",
++    "pair": "Связать"
+   },
+   "themeshop": {
+     "source": {
+@@ -389,6 +543,20 @@
+       "pagination_actions": "Влево и вправо меняют кнопку. A, сменить страницу. Вверх к сетке.",
+       "no_theme": "Нет темы",
+       "grid_actions": "Крестовина для навигации. A, открыть детали. B, назад к вкладкам."
++    },
++    "options": {
++      "action_hints": "Подсказки действий",
++      "action_hints_desc": "Как показывать подсказки управления в правом нижнем углу.",
++      "sort_large_tiles": "Сортировать и большие плитки",
++      "sort_large_tiles_desc": "Сортировка A-Я и «Недавние» также перемещает приложения с увеличенной плиткой.",
++      "hint_panel": "Панель",
++      "hint_capsules": "Капсулы",
++      "auto_theme": "Автоматическая тема",
++      "auto_theme_desc": "Автоматически переключаться между дневной и ночной темой."
++    },
++    "page": {
++      "next": "Далее",
++      "prev": "Назад"
+     }
+   },
+   "hint": {
+@@ -396,7 +564,26 @@
+     "voice": "Голос",
+     "sort_custom": "Мой порядок",
+     "sort_alpha": "А-Я",
+-    "sort_recent": "Недавние"
++    "sort_recent": "Недавние",
++    "options": "Параметры",
++    "switch_layout": "Сменить вид",
++    "search": "Поиск",
++    "cancel_b": "B Отмена",
++    "cancel": "Отмена",
++    "fullscreen": "Во весь экран",
++    "artwork": "Обложка",
++    "place": "Поставить",
++    "modes": "Режимы",
++    "skip": "Пропустить",
++    "back": "Назад",
++    "close": "Закрыть",
++    "confirm": "Подтвердить",
++    "launch": "Запустить",
++    "move": "Переместить",
++    "navigate": "Навигация",
++    "open": "Открыть",
++    "resume": "Продолжить",
++    "select": "Выбрать"
+   },
+   "accessibility": {
+     "speech": {
+@@ -413,7 +600,9 @@
+       "of": "из",
+       "left_sidebar": "Левая панель",
+       "right_sidebar": "Правая панель",
+-      "user_profiles": "Профили пользователей"
++      "user_profiles": "Профили пользователей",
++      "menu": "Контекстное меню",
++      "dynamic_line": "Центральная линия"
+     },
+     "roles": {
+       "button": "кнопка",
+@@ -426,14 +615,18 @@
+       "selector": "выбор",
+       "progress": "прогресс",
+       "info": "информация",
+-      "section": "раздел"
++      "section": "раздел",
++      "widget": "виджет",
++      "folder": "папка"
+     },
+     "hints": {
+       "open": "A, открыть.",
+       "open_user_page": "A, открыть страницу пользователя.",
+       "grid_empty": "Используйте крестовину, чтобы перейти к другой ячейке.",
+       "game_launchable": "A, запустить. Плюс, опции. Y, переместить. ZL или ZR, сменить страницу.",
+-      "game_blocked": "A, показать причину блокировки."
++      "game_blocked": "A, показать причину блокировки.",
++      "widget": "Plus — параметры виджета. Y — переместить. Минус — сменить вид.",
++      "recently_played_widget": "A — запустить недавнюю игру. Plus — параметры виджета. Y — переместить."
+     },
+     "actions": {
+       "edit_mode": "Крестовина выбирает новую позицию. Y, поставить. B, отмена.",
+@@ -442,7 +635,9 @@
+       "game_launchable": "A, запустить. Плюс, опции. Y, переместить. ZL или ZR, сменить страницу.",
+       "settings": "Вверх и вниз выбирают категорию. A или вправо, войти. B, закрыть.",
+       "themes": "Вверх и вниз для навигации. A, выбрать. B, закрыть.",
+-      "dialog": "Влево и вправо меняют выбор. A, подтвердить. B, отмена."
++      "dialog": "Влево и вправо меняют выбор. A, подтвердить. B, отмена.",
++      "edit_mode_folder": "Крестовина — выбрать позицию. A — поставить. B — выйти из папки, оставив программу выбранной.",
++      "context_menu": "Вверх и вниз — выбор. A — подтвердить. B — закрыть."
+     },
+     "settings": {
+       "tab_prefix": "Вкладка",
+@@ -452,7 +647,9 @@
+       "toggle_actions": "A, переключить. Влево, назад к вкладкам.",
+       "slider_actions": "Влево или вправо для настройки. B, назад к вкладкам.",
+       "selector_actions": "A или вправо открывает список. B, назад к вкладкам.",
+-      "action_actions": "A выполняет действие. B, назад к вкладкам."
++      "action_actions": "A выполняет действие. B, назад к вкладкам.",
++      "action_secondary_actions": "Влево и вправо — выбрать «Выбрать» или «Очистить». A — активировать. B — вернуться к вкладкам.",
++      "companion_actions": "A — активировать. Вправо — список. B — закрыть."
+     },
+     "value": {
+       "label": "Значение",
+@@ -460,7 +657,9 @@
+     },
+     "position": {
+       "row": "строка",
+-      "column": "столбец"
++      "column": "столбец",
++      "item": "элемент",
++      "of": "из"
+     },
+     "move_mode": {
+       "enter": "Перемещение игры: ",
+@@ -470,47 +669,55 @@
+     "grid": {
+       "empty_slot": "Пустая ячейка"
+     },
+-    "user_profile": "Профиль пользователя"
++    "user_profile": "Профиль пользователя",
++    "layout": {
++      "grid": "Режим сетки",
++      "dynamic_line": "Режим динамической линии"
++    },
++    "dialog_hints": "Влево и вправо — изменить. A — подтвердить. B — отмена."
+   },
+   "tutorial": {
+     "accessibility": {
+       "title": "Озвучивание",
+-      "body": "Озвучивание доступно в этом меню. Оно может читать выбранный элемент и доступные действия.",
+-      "objective": "Нажмите X, чтобы включить озвучивание на будущее. Нажмите A, чтобы продолжить без него.",
++      "body": "Для этого меню доступно голосовое сопровождение. Оно может вслух читать выбранный элемент и доступные действия.",
++      "objective": "Нажмите X, чтобы включить голосовое сопровождение на будущее. Нажмите A, чтобы продолжить без него.",
+       "enabled_announcement": "Озвучивание включено на будущее. Нажмите A, чтобы продолжить.",
+       "already_enabled_announcement": "Озвучивание уже включено на будущее.",
+       "disabled_announcement": "Озвучивание выключено. Звуки Animalese активны.",
+-      "text_actions": "A, продолжить. B, пропустить."
++      "text_actions": "A — продолжить. B — пропустить этот шаг. Plus — пропустить всё."
+     },
+     "accessibility_settings": {
+       "title": "Доступность",
+-      "body": "Параметры доступности находятся в Настройках, затем Доступность. Там можно настроить скорость, подсказки, место и позицию."
++      "body": "Параметры доступности находятся в Настройках, во вкладке «Доступность». Там можно изменить скорость речи, повторные подсказки, объявления о местоположении и подробности о позиции."
+     },
+     "welcome": {
+       "title": "Добро пожаловать в SwitchU",
+-      "body": "Это короткое обучение покажет основные кнопки."
++      "body": "SwitchU заменяет меню HOME быстрым интерфейсом для запуска игр, homebrew-приложений и системных инструментов."
+     },
+     "navigation": {
+       "title": "Навигация",
+-      "body": "Используйте крестовину или левый стик, чтобы перемещать фокус.",
+-      "objective": "Переместите фокус на другой элемент."
++      "body": "Перемещаться можно крестовиной, левым или правым стиком. Попробуйте одно горизонтальное и одно вертикальное направление.",
++      "objective": "Попробуйте влево или вправо, затем вверх или вниз.",
++      "left_right": "Влево / вправо",
++      "up_down": "Вверх / вниз"
+     },
+     "cursor": {
+-      "title": "Фокус",
+-      "body": "Светлая рамка показывает выбранный элемент."
++      "title": "Курсор",
++      "body": "Виртуальный курсор включается нажатием на стик, когда действию нужен указатель. Нажмите левый стик, чтобы включить его, или правый, чтобы вернуть в центр."
+     },
+     "themes": {
+       "title": "Темы",
+       "body": "Темы меняют цвета, изображения и звуки. Откройте Темы на боковой панели, чтобы установить или применить стиль."
+     },
+     "support": {
+-      "title": "Помощь",
+-      "body": "Внизу слева показаны полезные кнопки для текущего экрана."
++      "title": "Поддержка",
++      "body": "Чтобы сообщить о проблеме, откройте GitHub проекта: github.com/PoloNX/SwitchU"
+     },
+     "confirm": {
+-      "title": "Готово",
+-      "body": "Можно начинать.",
+-      "objective": "Нажмите A, чтобы подтвердить этот шаг."
++      "title": "Подтверждение",
++      "body": "Кнопка A подтверждает действие, запускает игру или открывает выбранный элемент.",
++      "objective": "Нажмите A, чтобы пройти этот шаг.",
++      "detected": "Кнопка A нажата"
+     },
+     "hints": {
+       "enable_voice": "Включить голос",
+@@ -521,7 +728,9 @@
+       "skip_step": "Пропустить шаг",
+       "skip_all": "Пропустить всё",
+       "test": "Тест"
+-    }
++    },
++    "header": "Обучение SwitchU",
++    "test_label": "Проверка"
+   },
+   "text_entry": {
+     "erase": "Стереть",
+@@ -531,7 +740,19 @@
+     "opened": "Экранная клавиатура. Крестовина для выбора символа, A — ввести, X — стереть, Plus — подтвердить, B — отмена.",
+     "shift": "Регистр",
+     "space": "Пробел",
+-    "symbols": "?12#"
++    "symbols": "?12#",
++    "backspace": "←",
++    "caps": "CAPS",
++    "field_focus": "Текстовое поле. Влево и вправо — перемещение курсора. L и R — выделение. Y — выделить всё. A — вернуться к клавишам.",
++    "hint_field": "←/→ курсор · L/R выделение · Y всё · ZL очистить · A клавиши · + ОК · B отмена",
++    "hint_field_password": "←/→ курсор · L/R выделение · Y всё · − показать/скрыть · ZL очистить · A клавиши · + ОК · B отмена",
++    "hint_password": "↑ поле · A ввод · X стереть · Y регистр · − показать/скрыть · ZL очистить · + ОК · B отмена",
++    "layout_compact": "Компактная клавиатура",
++    "layout_full": "Полная клавиатура",
++    "password_hidden": "Пароль скрыт",
++    "password_shown": "Пароль виден",
++    "style_flat": "Плоская клавиатура",
++    "style_glass": "Стеклянная клавиатура"
+   },
+   "quicksettings": {
+     "title": "Быстрые настройки",
+@@ -551,9 +772,287 @@
+     "off": "ВЫКЛ",
+     "power_options": "ПИТАНИЕ",
+     "sleep": "Сон",
+-    "reboot": "Перезагрузить",
++    "reboot": "Перезапуск",
+     "power_off": "Выключить",
+     "hint_adjust": "Настроить",
+-    "hint_shortcut": "Быстрые настройки"
+-  }
++    "hint_shortcut": "Быстрые настройки",
++    "music_empty": "Музыка не загружена",
++    "prev": "Назад",
++    "next": "Далее",
++    "play_pause": "Пуск/Пауза",
++    "repeat": "Повтор",
++    "shuffle": "Перемешать",
++    "playlist": "Плейлист",
++    "music_idle": "Не воспроизводится",
++    "playlist_empty": "Нет треков"
++  },
++  "profilelock": {
++    "title": "Профиль по умолчанию",
++    "none": "Спрашивать каждый раз",
++    "pill_locked": "Играет",
++    "pill_unlocked": "Спрашивать, кто играет",
++    "button_hint": "A — изменить.",
++    "opened_hint": "Влево и вправо — просмотр. X — сделать профилем по умолчанию.",
++    "default_badge": "По умолчанию",
++    "choose": "Сменить профиль",
++    "open_profile": "Открыть профиль",
++    "create_user": "Создать",
++    "always_ask": "Всегда спрашивать",
++    "set_default": "Сделать по умолчанию"
++  },
++  "folder": {
++    "create": "Создать папку",
++    "create_hint": "A — создать папку.",
++    "open": "Открыть",
++    "open_title": "Открыть папку",
++    "open_hint": "A — открыть. Plus — параметры папки. Y — переместить.",
++    "options": "Параметры папки",
++    "rename": "Переименовать",
++    "rename_title": "Название папки",
++    "delete": "Удалить папку",
++    "delete_desc": "Игры из папки вернутся в меню HOME.",
++    "name_guide": "Введите название папки",
++    "default_name": "Папка",
++    "rename_guide": "Переименовать папку",
++    "choose": "Выберите папку",
++    "add_game": "Добавить в папку",
++    "add_game_desc": "Выберите папку для этой программы.",
++    "remove_game": "Убрать из папки",
++    "remove_game_desc": "Вернуть эту программу в меню HOME.",
++    "no_folder_title": "Нет папок",
++    "no_folder": "Сначала создайте папку.",
++    "error_title": "Ошибка папки",
++    "save_error": "Не удалось сохранить изменения папки.",
++    "keyboard_error": "Не удалось открыть клавиатуру.",
++    "place_on_home": "Выберите пустую ячейку и нажмите A",
++    "place_hint": "A — поставить программу сюда. B — отмена.",
++    "added_confirmation": "Программа добавлена в папку: ",
++    "leave_while_moving": "Выйти из папки",
++    "appearance": "Внешний вид",
++    "management": "Управление",
++    "color": "Цвет папки",
++    "color_desc": "Выберите цвет этой папки.",
++    "color_blue": "Синий",
++    "color_green": "Зелёный",
++    "color_yellow": "Жёлтый",
++    "color_orange": "Оранжевый",
++    "color_red": "Красный",
++    "color_pink": "Розовый",
++    "color_purple": "Фиолетовый",
++    "color_gray": "Серый",
++    "size": "Размер папки",
++    "size_desc": "Меняет размер и количество значков.",
++    "size_small": "Маленький",
++    "size_medium": "Средний",
++    "size_large": "Большой",
++    "style": "Стиль папки",
++    "style_desc": "Меняет внешний вид (всех папок).",
++    "style_classic": "Классический",
++    "style_simple": "Простой",
++    "style_minimal": "Минимальный",
++    "style_tab": "Вкладка",
++    "style_ring": "Кольцо",
++    "style_manila": "Манильский",
++    "style_label": "Ярлык",
++    "show_cover": "Показывать обложку",
++    "show_cover_desc": "Показывать значок первой игры на папках.",
++    "custom_icon": "Свой значок обложки",
++    "custom_icon_desc": "Найти значок в SteamGridDB и использовать его.",
++    "custom_icon_set_desc": "Значок SteamGridDB активен для этой папки. Требуется «Показывать обложку».",
++    "custom_icon_clear_desc": "Убрать свою обложку SteamGridDB и снова использовать первую игру.",
++    "items": "элементов",
++    "move": "Переместить",
++    "page_added": "Страница добавлена"
++  },
++  "add": {
++    "title": "Добавить"
++  },
++  "widget": {
++    "title": "Виджет",
++    "create": "Создать новый виджет",
++    "clock": "Часы",
++    "recently_played": "Недавние игры",
++    "recent_playtime": "Недавнее время игры",
++    "random_screenshot": "Случайный скриншот",
++    "image_pin": "Закреплённое изображение",
++    "batteries": "Батареи",
++    "choose_type": "Выберите виджет",
++    "choose_size": "Выберите размер",
++    "choose_image": "Выберите изображение",
++    "resize": "Изменить размер",
++    "delete": "Удалить виджет",
++    "no_space": "Нет места",
++    "no_recent_game": "Нет недавних игр",
++    "last_played": "Последняя игра",
++    "played_recently": "Играли недавно",
++    "no_playtime": "Нет недавнего времени игры",
++    "error_title": "Ошибка виджета",
++    "save_error": "Не удалось сохранить изменения виджета.",
++    "no_assets_title": "Нет изображений для виджетов",
++    "no_assets_desc": "Добавьте файлы PNG, JPG, WebP или GIF в sdmc:/config/SwitchU/widgets/assets/ или в папку виджетов активной темы."
++  },
++  "controller_test": {
++    "title": "Проверка контроллера",
++    "opened": "Проверка контроллера. Ненадолго наклоните стик, чтобы выбрать его. Удерживайте B одну секунду или нажмите HOME, чтобы закрыть.",
++    "close_hint": "Удерживайте B 1 с или нажмите HOME, чтобы закрыть",
++    "joysticks": "Стики",
++    "buttons": "Кнопки",
++    "touchscreen": "Сенсорный экран",
++    "touch_hint": "Коснитесь или проведите здесь",
++    "touch_fullscreen_opened": "Полноэкранная проверка касаний. Нажмите X, чтобы вернуться. Удерживайте B одну секунду или нажмите HOME, чтобы закрыть.",
++    "touch_fullscreen_hint": "Проверка касаний · X: назад · Удерживайте B 1 с или HOME: закрыть",
++    "tilt_to_select": "Ненадолго наклоните стик, чтобы выбрать его",
++    "left_stick": "Левый стик",
++    "right_stick": "Правый стик",
++    "left_selected": "Выбран левый стик",
++    "right_selected": "Выбран правый стик",
++    "direction": "Направление",
++    "center": "Центр",
++    "up": "Вверх",
++    "down": "Вниз",
++    "left": "Влево",
++    "right": "Вправо"
++  },
++  "page": {
++    "minus_hint": "Вид · удерживайте для удаления",
++    "delete": "Удалить страницу",
++    "delete_message": "Эта страница пуста. Что вы хотите удалить?",
++    "delete_this": "Удалить эту страницу",
++    "delete_title": "Удаление страницы",
++    "delete_unused": "Удалить все неиспользуемые страницы",
++    "deleted": "Страница удалена",
++    "unused_deleted": "Неиспользуемые страницы удалены"
++  },
++  "autotheme": {
++    "day_starts": "День начинается в",
++    "day_theme": "Дневная тема",
++    "day_theme_desc": "Применяется днём.",
++    "geo_locating": "Определение местоположения через интернет...",
++    "geo_location": "Местоположение",
++    "geo_midnight_sun": "Полярный день",
++    "geo_polar_night": "Полярная ночь",
++    "geo_sunrise": "Восход",
++    "geo_sunset": "Закат",
++    "header": "Автоматическая тема",
++    "header_mode": "Режим: ",
++    "mode": "Переключение",
++    "mode_desc": "«Выкл» оставляет выбранную тему. «Вручную» использует фиксированные часы. «Геолокация» использует ваше примерное местоположение (нужен интернет).",
++    "mode_geo": "Геолокация (по IP)",
++    "mode_manual": "Часы вручную",
++    "mode_off": "Выкл",
++    "night_starts": "Ночь начинается в",
++    "night_theme": "Ночная тема",
++    "night_theme_desc": "Применяется ночью.",
++    "section": {
++      "geo": "Геолокация",
++      "mode": "Режим",
++      "schedule": "Расписание",
++      "themes": "Темы"
++    },
++    "summary": {
++      "geo": "Геолокация (по IP)",
++      "manual": "Часы вручную",
++      "off": "Выкл"
++    },
++    "title": "Автотема"
++  },
++  "manager": {
++    "applying": "Безопасное применение изменения...",
++    "cancel": "Отмена",
++    "check_updates": "Проверить обновления",
++    "confirm_disable_title": "Отключить SwitchU?",
++    "confirm_enable_title": "Включить SwitchU?",
++    "confirm_toggle_message": "Изменение вступит в силу после перезагрузки.",
++    "conflict": "Существуют файлы переопределения и для включения, и для отключения. Устраните конфликт установки вручную.",
++    "disable": "Отключить SwitchU",
++    "disabled_detail": "Для этой загрузки настроено оригинальное меню HOME от Nintendo.",
++    "do_not_close": "Не закрывайте приложение.",
++    "enable": "Включить SwitchU",
++    "enabled_detail": "Для этой загрузки настроено меню HOME от SwitchU.",
++    "error_commit": "Не удалось синхронизировать SD-карту. Изменение отменено.",
++    "error_invalid": "Состояние установки изменилось. Никаких действий не выполнено.",
++    "error_payload": "Файлы меню SwitchU неполные. Активация отменена.",
++    "error_reboot": "Не удалось перезагрузить консоль. Изменение конфигурации сохранено.",
++    "error_rename": "Не удалось переименовать переопределение Atmosphere.",
++    "error_rollback": "Откат не удался. Проверьте файлы переопределения SwitchU перед перезагрузкой.",
++    "error_title": "Операция не удалась",
++    "error_unknown": "Произошла непредвиденная ошибка.",
++    "error_verify": "Не удалось проверить изменение, оно отменено.",
++    "help": "Крестовина / стик: навигация  •  A: подтвердить  •  B: выход",
++    "help_restart": "A: подтвердить  •  B: позже",
++    "later": "Позже",
++    "missing": "Переопределение Atmosphere для SwitchU не найдено на SD-карте.",
++    "next_boot_disabled": "SwitchU будет отключён после следующей перезагрузки.",
++    "next_boot_enabled": "SwitchU будет включён после следующей перезагрузки.",
++    "no_change": "Никакие посторонние данные не изменялись.",
++    "ok": "OK",
++    "operation_blocked": "Операция заблокирована в целях безопасности",
++    "reboot": "Перезагрузить",
++    "reboot_confirm_message": "Закройте другое ПО и сохраните данные перед перезагрузкой.",
++    "reboot_confirm_title": "Перезагрузить консоль?",
++    "reboot_now": "Перезагрузить сейчас",
++    "restart_required": "Требуется перезагрузка",
++    "status_disabled": "SwitchU отключён",
++    "status_enabled": "SwitchU включён",
++    "status_unknown": "Состояние SwitchU недоступно",
++    "subtitle": "Выберите меню HOME для следующей загрузки.",
++    "title": "SwitchU Manager",
++    "up_to_date": "Установлена последняя версия",
++    "update_available": "Доступна новая версия SwitchU: ",
++    "update_check_failed": "Не удалось проверить обновления. Можно повторить.",
++    "update_checking": "Проверка последнего релиза на GitHub...",
++    "update_checking_button": "Проверка обновлений...",
++    "update_confirm_message": "Скачать и установить SwitchU ",
++    "update_confirm_suffix": " с GitHub? Ваша конфигурация и темы сохранятся.",
++    "update_confirm_title": "Установить обновление SwitchU?",
++    "update_download": "Скачать",
++    "update_error_title": "Обновление не удалось",
++    "update_install": "Установить обновление",
++    "update_installation": "Установка",
++    "update_installing": "Загрузка и установка обновления SwitchU...",
++    "update_preparing": "Подготовка обновления...",
++    "update_progress_title": "Установка обновления SwitchU",
++    "update_retry": "Повторить проверку обновлений",
++    "update_stage_downloading": "Загрузка обновления...",
++    "update_stage_extracting": "Подготовка установки...",
++    "update_stage_installing": "Установка файлов...",
++    "update_stage_verifying": "Проверка загрузки...",
++    "update_to": "Обновить до ",
++    "updating": "Обновление..."
++  },
++  "sgdb_picker": {
++    "no_games": "Игры не найдены",
++    "games_pick": "Найдено игр: {} — выберите одну",
++    "choices_for": "Вариантов: {} — {}",
++    "kind_icon": "Значок",
++    "search": "Поиск",
++    "change_name": "X  Изменить название",
++    "search_failed_title": "Поиск не удался",
++    "hint_error": "B Назад   X Другой поиск",
++    "hint_games": "A Выбрать игру   B Назад   X Поиск",
++    "hint_art_back": "A Применить   B Назад   X Поиск   Стр. {}/{}",
++    "hint_art_games": "A Применить   B К играм   X Поиск   Стр. {}/{}",
++    "loading_for": "Загрузка обложек для «{}»...",
++    "applying": "Применение выбора..."
++  },
++  "controllers.title": "Контроллеры",
++  "controllers.disconnected": "Не подключён",
++  "controllers.handheld": "Портативный режим",
++  "controllers.pro": "Pro Controller",
++  "controllers.joycon_pair": "Joy-Con (L + R)",
++  "controllers.joycon_l": "Joy-Con (L)",
++  "controllers.joycon_r": "Joy-Con (R)",
++  "controllers.gamecube": "Контроллер GameCube",
++  "controllers.poke_ball": "Poke Ball Plus",
++  "controllers.other": "Другой контроллер",
++  "controllers.player": "Игрок",
++  "controllers.handheld_slot": "Портатив",
++  "controllers.swapped": "Порядок игроков изменён",
++  "controllers.swap_failed": "Не удалось изменить порядок",
++  "controllers.grip_horizontal": "Хват Joy-Con: горизонтальный",
++  "controllers.grip_vertical": "Хват Joy-Con: вертикальный (один Joy-Con)",
++  "controllers.grip_horizontal_short": "Хват: горизонтальный",
++  "controllers.grip_vertical_short": "Хват: вертикальный",
++  "controllers.footer": "↑↓ Выбор   Y: Поменять со следующим   X: Хват   +: Подключить   −: Тест   B: Закрыть",
++  "controllers.opened": "Контроллеры. Вверх и вниз выбирают игрока, Y меняет со следующим, X меняет хват, Плюс подключает новый контроллер, Минус — тест ввода, B закрывает."
+ }
+diff --git a/xmake.lua b/xmake.lua
+index ad79863..7e22a83 100644
+--- a/xmake.lua
++++ b/xmake.lua
+@@ -160,7 +160,24 @@ target("atmosphere-stratosphere")
+             cprint("${color.build.target}cached${clear} libstratosphere")
+             return
+         end
+-        os.execv("make", {"-C", "lib/Atmosphere-libs/libstratosphere", "nx_release"})
++        -- Build libstratosphere in parallel (the stock "nx_release" wrapper runs
++        -- a serial make, ~20 min). Calling libstratosphere.mk directly lets us
++        -- pass -j, drop debug info and silence third-party [[nodiscard]] noise.
++        local jobs = tostring(math.max(os.cpuinfo("ncpu") or 2, 2))
++        local branch = "detached"
++        local ok, out = pcall(os.iorunv, "git", {"-C", source_dir, "symbolic-ref", "--short", "HEAD"})
++        if ok and out and #out:trim() > 0 then branch = out:trim() end
++        os.execv("make", {
++            "-C", "lib/Atmosphere-libs/libstratosphere",
++            "-f", "libstratosphere.mk",
++            "-j" .. jobs,
++            "ATMOSPHERE_MAKEFILE_TARGET=nx_release",
++            "ATMOSPHERE_BUILD_NAME=release",
++            "ATMOSPHERE_BOARD=nx-hac-001",
++            "ATMOSPHERE_CPU=arm-cortex-a57",
++            "ATMOSPHERE_GIT_BRANCH=" .. branch,
++            "ATMOSPHERE_BUILD_SETTINGS=-Wno-unused-result -g0"
++        })
+         stamp.write("libstratosphere", revision)
+     end)
+ target_end()

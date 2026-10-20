@@ -1,0 +1,175 @@
+#pragma once
+#include <nxui/widgets/Widget.hpp>
+#include <nxui/focus/FocusManager.hpp>
+#include <nxui/core/Types.hpp>
+#include <nxui/core/Animation.hpp>
+#include "core/AppLayoutMode.hpp"
+#include <vector>
+#include <memory>
+#include <functional>
+
+
+class GlossyIcon;
+
+struct IconAppearOptions {
+    float baseDelay = 0.f;
+    float stagger   = 0.40f;
+    bool  fromTile  = false;
+    nxui::Rect origin{};
+};
+
+class IconGrid : public nxui::Widget {
+public:
+    IconGrid();
+
+    void setup(std::vector<std::shared_ptr<GlossyIcon>> icons,
+               int cols, int rows,
+               float cellW, float cellH,
+               float padX, float padY);
+    void reconfigureLayout(int cols, int rows,
+                           float cellW, float cellH,
+                           float padX, float padY);
+
+    void setLayoutMode(AppLayoutMode mode);
+    AppLayoutMode layoutMode() const { return m_layoutMode; }
+    bool isDynamicLine() const { return m_layoutMode == AppLayoutMode::DynamicLine; }
+    // Vertical centre of the single-row carousel as a fraction of the grid
+    // rect. 0.5 puts the focused icon on the middle of the screen (the grid
+    // rect is symmetric about y = 360). Shared with the folder plate geometry.
+    static constexpr float kLineCenterFraction = 0.5f;
+    bool isDynamicLineScrolling() const;
+    bool isLayoutMorphing() const { return m_layoutMorphing; }
+    void setDynamicLineUpTarget(nxui::Widget* target);
+    void setDynamicLineDownTarget(nxui::Widget* target);
+
+    void setPage(int page);
+    int  currentPage()  const { return m_page; }
+    int  totalPages()   const { return m_totalPages; }
+    int  columns()      const { return m_cols; }
+    int  rowsPerPage()  const { return m_rows; }
+    int  iconsPerPage() const { return m_cols * m_rows; }
+
+    nxui::FocusManager& focusManager() { return m_focus; }
+    const std::vector<std::shared_ptr<GlossyIcon>>& allIcons() const { return m_allIcons; }
+
+    std::vector<GlossyIcon*> pageIcons() const;
+
+    int hitTest(float screenX, float screenY) const;
+    nxui::Rect focusedDisplayRect() const;
+    nxui::Rect gridSpanRect(int globalIndex, int columns, int rows) const;
+    // Bounds of the laid-out cell block (not the whole widget rect).
+    nxui::Rect contentRect() const;
+    void setGridSideTargets(std::vector<nxui::Widget*> left,
+                            std::vector<nxui::Widget*> right);
+
+    int focusedGlobalIndex() const;
+    bool focusGlobalIndex(int idx, bool instant = false);
+    bool swapSlots(int a, int b);
+
+    void startAppearAnimation(const IconAppearOptions& opt = IconAppearOptions{});
+    // Mirror of a fromTile appear: icons fly back into opt.origin, last in, first out.
+    void startDisappearAnimation(const IconAppearOptions& opt, float dur);
+
+    // Move-mode swap effect. Each pair is (previous, current) global index of a
+    // tile that traded places with the other. Tiles that stay on the visible
+    // page glide across the gap their partner left behind; a tile arriving from
+    // another page slides in from the side that page lies on. Call after the
+    // model rebuild, since the rebuild force-visibles every icon.
+    void animateSwap(int heldPrevious, int heldCurrent,
+                     int displacedPrevious, int displacedCurrent);
+
+    void startPageTransition(int targetPage);
+    bool isTransitioning() const { return m_sliding; }
+
+    void bumpEdge(int dir);
+
+    void setSlideTransition(bool enabled) { m_slideTransition = enabled; }
+    void setEdgePaging(bool enabled) { m_edgePaging = enabled; }
+    void onEdgePage(std::function<void(int dir)> cb) { m_onEdgePage = std::move(cb); }
+
+    void onPageSwitched(std::function<void()> cb) { m_onPageSwitched = std::move(cb); }
+
+    void render(nxui::Renderer& ren) override;
+
+protected:
+    void onUpdate(float dt) override;
+    void onRender(nxui::Renderer& ren) override;
+
+private:
+    void layoutPage();
+    void layoutLine();
+    void positionPage(int page, float dx);
+    void renderPageAt(nxui::Renderer& ren, int page, float dx);
+    void renderDynamicLine(nxui::Renderer& ren);
+    void renderLayoutMorph(nxui::Renderer& ren);
+    nxui::Rect gridSlotRect(int globalIndex) const;
+    nxui::Rect morphBlend(int globalIndex, const nxui::Rect& gridRect) const;
+    void bindEdgeActions(int start, int end);
+    void bindGridNavigation(int start, int end);
+    nxui::Rect dynamicIconRect(int index, float* outScale = nullptr,
+                               float* outOpacity = nullptr,
+                               float* outDistance = nullptr) const;
+    float pageStride() const;
+
+    // Carousel render scratch. Reused across frames so drawing the line does
+    // not allocate every frame, and each survivor keeps the rect that was
+    // already computed for it instead of recomputing an identical one.
+    struct RenderCandidate {
+        int index;
+        float absD;
+        float d;
+        float s;
+        float a;
+        nxui::Rect rect;
+    };
+    mutable std::vector<RenderCandidate> m_lineRenderScratch;
+
+    // Inputs the carousel layout was last computed against. Used to skip the
+    // full-library rect rebuild while the line is at rest.
+    int m_lineLayoutCacheCount = -1;
+    float m_lineLayoutCacheOffset = 0.f;
+    nxui::Rect m_lineLayoutCacheRect{};
+
+    std::vector<std::shared_ptr<GlossyIcon>> m_allIcons;
+    nxui::FocusManager m_focus;
+
+    AppLayoutMode m_layoutMode = AppLayoutMode::Grid;
+    nxui::AnimatedFloat m_lineScrollOffset{0.f};
+    // 0 = grid geometry (usual), 1 = carousel geometry (single row)
+    nxui::AnimatedFloat m_layoutMorph{0.f};
+    bool m_layoutMorphing = false;
+    int  m_layoutMorphPage = 0;
+    static constexpr float kLayoutMorphDuration = 0.40f;
+    nxui::Widget* m_lineUpTarget = nullptr;
+    nxui::Widget* m_lineDownTarget = nullptr;
+    std::vector<nxui::Widget*> m_gridLeftTargets;
+    std::vector<nxui::Widget*> m_gridRightTargets;
+
+    int m_cols = 5, m_rows = 3;
+    int m_page = 0, m_totalPages = 1;
+    float m_cellW = 200, m_cellH = 200;
+    float m_padX  = 20,  m_padY  = 20;
+    float m_originX = 0, m_originY = 0;
+    static constexpr float kLineScrollDuration = 0.34f;
+
+    // Slide is what the grid starts with: a build path that forgets to apply
+    // the user's Page Transition setting should fall back to the usual slide,
+    // never to the teleport cascade.
+    bool  m_slideTransition = true;
+    bool  m_edgePaging      = false;
+    bool  m_sliding         = false;
+    int   m_slidePrevPage   = 0;
+    int   m_slideDir        = 1;
+    float m_slideT          = 0.f;
+    float m_slideInDx       = 0.f;
+    float m_slideOutDx      = 0.f;
+    static constexpr float kSlideDuration = 0.34f;
+    static constexpr float kSwapGlideDuration = 0.36f;
+
+    nxui::AnimatedFloat m_edgeBump;
+    bool  m_bumping = false;
+    static constexpr float kEdgeBumpDistance = 26.f;
+
+    std::function<void()> m_onPageSwitched;
+    std::function<void(int)> m_onEdgePage;
+};

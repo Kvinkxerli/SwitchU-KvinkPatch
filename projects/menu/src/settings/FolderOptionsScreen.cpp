@@ -1,0 +1,208 @@
+#include "FolderOptionsScreen.hpp"
+#include <nxui/core/Utf8.hpp>
+#include "widgets/FolderPalette.hpp"
+#include "widgets/FolderStyleDraw.hpp"
+#include "core/FolderStore.hpp"
+#include <nxui/core/I18n.hpp>
+#include <nxui/core/Renderer.hpp>
+#include <algorithm>
+
+namespace {
+
+std::string ellipsize(nxui::Font* font, std::string text, float maxWidth) {
+    if (!font || font->measure(text).x <= maxWidth)
+        return text;
+    while (!text.empty()) {
+        nxui::popUtf8Codepoint(text);
+        if (font->measure(text + "...").x <= maxWidth)
+            return text + "...";
+    }
+    return "...";
+}
+
+} // namespace
+
+FolderOptionsScreen::FolderOptionsScreen()
+    : TabbedOverlayScreen(ScreenMode::FolderOptions) {
+    constexpr float width = 920.f;
+    setRect({(1280.f - width) * 0.5f, 32.f, width, 656.f});
+}
+
+void FolderOptionsScreen::setFolder(const FolderInfo& info) {
+    m_folder = info;
+    m_folder.colorIndex = std::clamp(m_folder.colorIndex, 0, 7);
+    m_folder.sizeIndex = std::clamp(m_folder.sizeIndex, 0, 2);
+    m_folder.styleIndex = std::clamp(m_folder.styleIndex, 0,
+                                     switchu::folders::kFolderStyleCount - 1);
+    m_tabs.clear();
+    m_cachedTabContentWidgets.clear();
+    warmup();
+}
+
+void FolderOptionsScreen::buildTabs() {
+    auto& i18n = nxui::I18n::instance();
+    m_tabs.clear();
+
+    Tab appearance;
+    appearance.name = i18n.tr("folder.appearance", "Appearance");
+
+    SettingItem color;
+    color.label = i18n.tr("folder.color", "Folder color");
+    color.description = i18n.tr("folder.color_desc", "Choose the color used by this folder.");
+    color.type = ItemType::Selector;
+    color.options = {
+        i18n.tr("folder.color_blue", "Blue"),
+        i18n.tr("folder.color_green", "Green"),
+        i18n.tr("folder.color_yellow", "Yellow"),
+        i18n.tr("folder.color_orange", "Orange"),
+        i18n.tr("folder.color_red", "Red"),
+        i18n.tr("folder.color_pink", "Pink"),
+        i18n.tr("folder.color_purple", "Purple"),
+        i18n.tr("folder.color_gray", "Gray"),
+    };
+    color.intVal = m_folder.colorIndex;
+    color.onChange = [this](SettingItem& self) {
+        m_folder.colorIndex = std::clamp(self.intVal, 0, 7);
+        if (m_colorCb) m_colorCb(m_folder.colorIndex);
+    };
+    appearance.items.push_back(std::move(color));
+
+    SettingItem size;
+    size.label = i18n.tr("folder.size", "Folder size");
+    size.description = i18n.tr(
+        "folder.size_desc", "Changes the size and number of icons.");
+    size.type = ItemType::Selector;
+    size.options = {
+        i18n.tr("folder.size_small", "Small"),
+        i18n.tr("folder.size_medium", "Medium"),
+        i18n.tr("folder.size_large", "Large"),
+    };
+    size.intVal = m_folder.sizeIndex;
+    size.onChange = [this](SettingItem& self) {
+        m_folder.sizeIndex = std::clamp(self.intVal, 0, 2);
+        if (m_sizeCb) m_sizeCb(m_folder.sizeIndex);
+    };
+    appearance.items.push_back(std::move(size));
+
+    SettingItem style;
+    style.label = i18n.tr("folder.style", "Folder style");
+    style.description = i18n.tr(
+        "folder.style_desc",
+        "Change look and feel (of all folders)");
+    style.type = ItemType::Selector;
+    style.options = {
+        i18n.tr("folder.style_classic", "Classic"),
+        i18n.tr("folder.style_simple", "Simple"),
+        i18n.tr("folder.style_minimal", "Minimal"),
+        i18n.tr("folder.style_tab", "Tab"),
+        i18n.tr("folder.style_ring", "Ring"),
+        i18n.tr("folder.style_manila", "Manila"),
+        i18n.tr("folder.style_label", "Label"),
+    };
+    style.intVal = m_folder.styleIndex;
+    style.onChange = [this](SettingItem& self) {
+        m_folder.styleIndex = std::clamp(self.intVal, 0,
+                                         switchu::folders::kFolderStyleCount - 1);
+        if (m_styleCb) m_styleCb(m_folder.styleIndex);
+    };
+    appearance.items.push_back(std::move(style));
+
+    SettingItem cover;
+    cover.label = i18n.tr("folder.show_cover", "Show cover");
+    cover.description = i18n.tr(
+        "folder.show_cover_desc",
+        "Show first apps icon on folders.");
+    cover.type = ItemType::Toggle;
+    cover.boolVal = m_folder.showCover;
+    cover.anim01 = cover.boolVal ? 1.f : 0.f;
+    cover.onChange = [this](SettingItem& self) {
+        m_folder.showCover = self.boolVal;
+        if (m_coverCb) m_coverCb(m_folder.showCover);
+    };
+    appearance.items.push_back(std::move(cover));
+
+    SettingItem customIcon;
+    customIcon.label = i18n.tr("folder.custom_icon", "Custom cover icon");
+    customIcon.buttonLabel = i18n.tr("button.select", "Select");
+    if (m_folder.hasCustomIcon) {
+        customIcon.secondaryButtonLabel = i18n.tr("button.clear_x", "×");
+        customIcon.onSecondary = [this](SettingItem&) {
+            if (m_customIconClearCb) m_customIconClearCb();
+        };
+    }
+    customIcon.description = m_folder.hasCustomIcon
+        ? i18n.tr("folder.custom_icon_set_desc",
+                  "SteamGridDB icon is active for this folder. Requires Show cover.")
+        : i18n.tr("folder.custom_icon_desc",
+                  "Search SteamGridDB and use an icon.");
+    customIcon.type = ItemType::Action;
+    customIcon.onChange = [this](SettingItem&) {
+        if (m_customIconSelectCb) m_customIconSelectCb();
+    };
+    appearance.items.push_back(std::move(customIcon));
+    m_tabs.push_back(std::move(appearance));
+
+    Tab management;
+    management.name = i18n.tr("folder.management", "Management");
+
+    SettingItem open;
+    open.label = i18n.tr("folder.open_title", "Open folder");
+    open.buttonLabel = i18n.tr("button.open", "Open");
+    open.type = ItemType::Action;
+    open.onChange = [this](SettingItem&) { if (m_openCb) m_openCb(); };
+    management.items.push_back(std::move(open));
+
+    SettingItem rename;
+    rename.label = i18n.tr("folder.rename_title", "Folder name");
+    rename.buttonLabel = i18n.tr("button.rename", "Rename");
+    rename.type = ItemType::Action;
+    rename.onChange = [this](SettingItem&) { if (m_renameCb) m_renameCb(); };
+    management.items.push_back(std::move(rename));
+
+    SettingItem erase;
+    erase.label = i18n.tr("folder.delete", "Delete folder");
+    erase.buttonLabel = i18n.tr("button.delete", "Delete");
+    erase.description = i18n.tr("folder.delete_desc", "Games inside will return to the HOME menu.");
+    erase.type = ItemType::Action;
+    erase.onChange = [this](SettingItem&) { if (m_deleteCb) m_deleteCb(); };
+    management.items.push_back(std::move(erase));
+    m_tabs.push_back(std::move(management));
+
+    m_cachedTabContentWidgets.clear();
+    m_cachedTabContentWidgets.resize(m_tabs.size());
+    rebuildTabBar();
+    rebuildContentItems();
+}
+
+void FolderOptionsScreen::drawOverlayHeader(nxui::Renderer& ren,
+                                             const nxui::Rect& panel,
+                                             float opacity) {
+    if (!m_theme || !m_font || !m_smallFont)
+        return;
+
+    const nxui::Rect shell{panel.x + 30.f, panel.y + 24.f, 92.f, 92.f};
+    switchu::folders::FolderStyleDrawArgs preview;
+    preview.renderer = &ren;
+    preview.bounds = shell;
+    preview.radius = 18.f;
+    preview.scale = 1.f;
+    preview.opacity = opacity;
+    preview.styleIndex = m_folder.styleIndex;
+    preview.accent = switchu::folders::colorForIndex(m_folder.colorIndex);
+    preview.themeMode = m_theme->mode;
+    preview.drawName = false;
+    preview.showCover = m_folder.showCover;
+    preview.cover = (m_folder.cover && m_folder.cover->valid()) ? m_folder.cover : nullptr;
+    preview.schematicPlaceholder = preview.cover == nullptr;
+    switchu::folders::drawFolderStyle(preview);
+
+    const float textX = shell.right() + 24.f;
+    const float textW = std::max(0.f, panel.right() - 30.f - textX);
+    ren.drawText(ellipsize(m_font, m_folder.name, textW),
+                 {textX, panel.y + 38.f}, m_font,
+                 m_theme->textPrimary.withAlpha(opacity), 1.f);
+    const std::string count = std::to_string(m_folder.itemCount) + " " +
+        nxui::I18n::instance().tr("folder.items", "items");
+    ren.drawText(count, {textX, panel.y + 82.f}, m_smallFont,
+                 m_theme->textSecondary.withAlpha(opacity), 0.82f);
+}

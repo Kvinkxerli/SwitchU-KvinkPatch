@@ -1,0 +1,430 @@
+#include "AccessibilityManager.hpp"
+#include "DebugLog.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cstring>
+#include <unordered_map>
+#include <vector>
+
+#include <SDL2/SDL.h>
+#include <espeak-ng/speak_lib.h>
+
+namespace {
+
+std::string trimSpaces(std::string text) {
+    auto notSpace = [](unsigned char ch) {
+        return std::isspace(ch) == 0;
+    };
+    text.erase(text.begin(), std::find_if(text.begin(), text.end(), notSpace));
+    text.erase(std::find_if(text.rbegin(), text.rend(), notSpace).base(), text.end());
+    return text;
+}
+
+std::string joinSentence(const std::string& left, const std::string& right) {
+    if (left.empty()) return right;
+    if (right.empty()) return left;
+    return left + ". " + right;
+}
+
+int clampSpeechRate(int rate) {
+    return std::clamp(rate, 120, 320);
+}
+
+std::string joinPath(const std::string& base, const char* child) {
+    if (base.empty())
+        return child;
+    if (base.back() == '/')
+        return base + child;
+    return base + "/" + child;
+}
+
+std::string normalizeLanguageTag(std::string tag) {
+    std::replace(tag.begin(), tag.end(), '_', '-');
+    std::transform(tag.begin(), tag.end(), tag.begin(), [](unsigned char ch) {
+        return (char)std::tolower(ch);
+    });
+    return tag;
+}
+
+} // namespace
+
+AccessibilityManager* AccessibilityManager::s_activeSynthTarget = nullptr;
+
+AccessibilityManager::~AccessibilityManager() {
+    shutdown();
+}
+
+bool AccessibilityManager::initialize(bool enabled, const std::string& voice,
+                                      const std::string& dataRoot) {
+    configure(enabled, voice);
+    return initializeConfigured(dataRoot, m_voice, m_speechRate);
+}
+
+void AccessibilityManager::configure(bool enabled, const std::string& voice) {
+    m_enabled = enabled;
+    m_voice = voiceForLanguageTag(voice);
+    m_speechRate = clampSpeechRate(m_speechRate);
+    m_lastAnnouncement.clear();
+    m_lastFocusContext.clear();
+    m_engineFailed = false;
+}
+
+bool AccessibilityManager::ensureEngine() {
+    if (m_initialized.load(std::memory_order_acquire))
+        return true;
+    if (m_engineFailed)
+        return false;
+    return initializeConfigured(m_dataRoot, m_voice, m_speechRate);
+}
+
+bool AccessibilityManager::initializeConfigured(const std::string& dataRoot,
+                                                 const std::string& voice,
+                                                 int speechRate) {
+    if (m_initialized.load(std::memory_order_acquire))
+        return true;
+    m_dataRoot = dataRoot;
+    if (!m_enabled) {
+        DebugLog::log("[accessibility] speech disabled, espeak-ng startup deferred");
+        return true;
+    }
+    if (m_engineFailed)
+        return false;
+
+    std::string configuredVoice = voiceForLanguageTag(voice);
+    const int configuredRate = clampSpeechRate(speechRate);
+    s_activeSynthTarget = this;
+    espeak_SetSynthCallback(&AccessibilityManager::synthCallback);
+
+    std::vector<std::string> dataRoots;
+    if (!m_dataRoot.empty())
+        dataRoots.push_back(m_dataRoot);
+    dataRoots.push_back("sdmc:/switch/SwitchU");
+    dataRoots.push_back("romfs:");
+
+    int sampleRate = -1;
+    std::string usedRoot;
+    for (const auto& root : dataRoots) {
+        sampleRate = espeak_Initialize(AUDIO_OUTPUT_SYNCHRONOUS, 80, root.c_str(),
+                                       espeakINITIALIZE_DONT_EXIT);
+        if (sampleRate > 0) {
+            usedRoot = root;
+            break;
+        }
+        DebugLog::log("[accessibility] espeak init failed with data root %s",
+                      joinPath(root, "espeak-ng-data").c_str());
+    }
+
+    if (sampleRate <= 0) {
+        DebugLog::log("[accessibility] espeak-ng initialization failed");
+        if (s_activeSynthTarget == this)
+            s_activeSynthTarget = nullptr;
+        m_initialized.store(false, std::memory_order_release);
+        // Don't retry on every announce; a missing data root won't fix itself.
+        m_engineFailed = true;
+        return false;
+    }
+    m_sampleRate = sampleRate;
+    const espeak_ERROR voiceResult = espeak_SetVoiceByName(configuredVoice.c_str());
+    if (voiceResult != EE_OK) {
+        DebugLog::log("[accessibility] espeak voice '%s' failed, falling back to en-us",
+                      configuredVoice.c_str());
+        configuredVoice = "en-us";
+        espeak_SetVoiceByName(configuredVoice.c_str());
+    }
+    espeak_SetParameter(espeakRATE, configuredRate, 0);
+    m_initialized.store(true, std::memory_order_release);
+    DebugLog::log("[accessibility] espeak-ng initialized voice=%s rate=%d data=%s",
+                  configuredVoice.c_str(),
+                  configuredRate,
+                  joinPath(usedRoot, "espeak-ng-data").c_str());
+
+    return true;
+}
+
+void AccessibilityManager::shutdown() {
+    if (!m_initialized.load(std::memory_order_acquire)) {
+        m_engineFailed = false;
+        return;
+    }
+
+    releaseCurrentSpeech();
+    espeak_Cancel();
+    espeak_Terminate();
+    if (s_activeSynthTarget == this)
+        s_activeSynthTarget = nullptr;
+    m_initialized.store(false, std::memory_order_release);
+    m_engineFailed = false;
+    m_lastAnnouncement.clear();
+    m_lastFocusContext.clear();
+}
+
+void AccessibilityManager::setEnabled(bool enabled) {
+    if (m_enabled == enabled)
+        return;
+    m_enabled = enabled;
+    if (!m_enabled) {
+        releaseCurrentSpeech();
+        if (m_initialized)
+            espeak_Cancel();
+        return;
+    }
+    // First time speech is switched on we pay the engine startup here rather
+    // than during menu boot.
+    ensureEngine();
+}
+
+void AccessibilityManager::setSpeechRate(int wordsPerMinute) {
+    m_speechRate = clampSpeechRate(wordsPerMinute);
+    if (m_initialized.load(std::memory_order_acquire))
+        espeak_SetParameter(espeakRATE, m_speechRate, 0);
+}
+
+bool AccessibilityManager::setVoiceForLanguageTag(const std::string& languageTag) {
+    const std::string voice = voiceForLanguageTag(languageTag);
+    m_voice = voice;
+
+    if (!m_initialized.load(std::memory_order_acquire))
+        return true;
+
+    const espeak_ERROR result = espeak_SetVoiceByName(voice.c_str());
+    if (result != EE_OK) {
+        DebugLog::log("[accessibility] espeak voice '%s' failed, falling back to en-us",
+                      voice.c_str());
+        m_voice = "en-us";
+        return espeak_SetVoiceByName(m_voice.c_str()) == EE_OK;
+    }
+
+    DebugLog::log("[accessibility] voice set to %s for language %s",
+                  m_voice.c_str(),
+                  languageTag.empty() ? "<empty>" : languageTag.c_str());
+    return true;
+}
+
+std::string AccessibilityManager::voiceForLanguageTag(const std::string& languageTag) {
+    const std::string tag = normalizeLanguageTag(languageTag);
+    if (tag.empty() || tag == "auto")
+        return "en-us";
+
+    static const std::unordered_map<std::string, std::string> kVoiceByTag = {
+        {"ja-jp", "ja"},
+        {"ja", "ja"},
+        {"en-us", "en-us"},
+        {"en-gb", "en-gb"},
+        {"en", "en-us"},
+        {"fr-fr", "fr"},
+        {"fr-ca", "fr"},
+        {"fr", "fr"},
+        {"de-de", "de"},
+        {"de", "de"},
+        {"it-it", "it"},
+        {"it", "it"},
+        {"es-es", "es"},
+        {"es-419", "es-419"},
+        {"es-mx", "es-419"},
+        {"es", "es"},
+        {"zh-cn", "cmn"},
+        {"zh-hans", "cmn"},
+        {"zh-tw", "yue"},
+        {"zh-hant", "yue"},
+        {"zh", "cmn"},
+        {"ko-kr", "ko"},
+        {"ko", "ko"},
+        {"nl-nl", "nl"},
+        {"nl", "nl"},
+        {"pt-pt", "pt"},
+        {"pt-br", "pt-BR"},
+        {"pt", "pt"},
+        {"ru-ru", "ru"},
+        {"ru", "ru"},
+    };
+
+    if (auto it = kVoiceByTag.find(tag); it != kVoiceByTag.end())
+        return it->second;
+
+    const size_t dash = tag.find('-');
+    if (dash != std::string::npos) {
+        const std::string base = tag.substr(0, dash);
+        if (auto it = kVoiceByTag.find(base); it != kVoiceByTag.end())
+            return it->second;
+    }
+
+    return "en-us";
+}
+
+void AccessibilityManager::announce(const std::string& text, bool interrupt, bool allowRepeat) {
+    if (!m_enabled)
+        return;
+    if (!ensureEngine())
+        return;
+
+    std::string spoken = trimSpaces(text);
+    if (spoken.empty())
+        return;
+
+    if (!allowRepeat && spoken == m_lastAnnouncement)
+        return;
+    m_lastAnnouncement = spoken;
+
+    if (interrupt) {
+        releaseCurrentSpeech();
+        espeak_Cancel();
+    }
+    m_synthPcm.clear();
+    espeak_Synth(spoken.c_str(),
+                 spoken.size() + 1,
+                 0,
+                 POS_CHARACTER,
+                 0,
+                 espeakCHARS_UTF8,
+                 nullptr,
+                 nullptr);
+    espeak_Synchronize();
+    playSynthBuffer();
+}
+
+void AccessibilityManager::announceAndDisable(const std::string& text) {
+    if (!ensureEngine())
+        return;
+    m_enabled = true;
+    announce(text, true, true);
+    m_enabled = false;
+}
+
+void AccessibilityManager::repeatLastAnnouncement() {
+    announce(m_lastAnnouncement, true, true);
+}
+
+int AccessibilityManager::synthCallback(short* wav, int numsamples, espeak_EVENT* events) {
+    (void)events;
+    if (s_activeSynthTarget)
+        s_activeSynthTarget->appendSynthSamples(wav, numsamples);
+    return 0;
+}
+
+void AccessibilityManager::appendSynthSamples(short* wav, int numsamples) {
+    if (!wav || numsamples <= 0)
+        return;
+    m_synthPcm.insert(m_synthPcm.end(), wav, wav + numsamples);
+}
+
+void AccessibilityManager::releaseCurrentSpeech() {
+    if (m_ttsChannel >= 0) {
+        Mix_HaltChannel(m_ttsChannel);
+        m_ttsChannel = -1;
+    }
+    if (m_ttsChunk) {
+        Mix_FreeChunk(m_ttsChunk);
+        m_ttsChunk = nullptr;
+    }
+    m_mixBuffer.clear();
+}
+
+void AccessibilityManager::playSynthBuffer() {
+    if (m_synthPcm.empty())
+        return;
+
+    int mixFreq = 0;
+    Uint16 mixFormat = 0;
+    int mixChannels = 0;
+    if (!Mix_QuerySpec(&mixFreq, &mixFormat, &mixChannels) || mixFreq <= 0 || mixChannels <= 0) {
+        DebugLog::log("[accessibility] mixer is not ready for speech playback");
+        return;
+    }
+
+    const auto* raw = reinterpret_cast<const unsigned char*>(m_synthPcm.data());
+    const int rawBytes = (int)(m_synthPcm.size() * sizeof(short));
+
+    SDL_AudioCVT cvt {};
+    if (SDL_BuildAudioCVT(&cvt, AUDIO_S16SYS, 1, m_sampleRate, mixFormat, mixChannels, mixFreq) < 0) {
+        DebugLog::log("[accessibility] SDL_BuildAudioCVT failed: %s", SDL_GetError());
+        return;
+    }
+
+    releaseCurrentSpeech();
+
+    if (cvt.needed) {
+        cvt.len = rawBytes;
+        cvt.buf = static_cast<Uint8*>(SDL_malloc((size_t)cvt.len * (size_t)cvt.len_mult));
+        if (!cvt.buf) {
+            DebugLog::log("[accessibility] speech conversion allocation failed");
+            return;
+        }
+        std::memcpy(cvt.buf, raw, (size_t)rawBytes);
+        if (SDL_ConvertAudio(&cvt) < 0) {
+            DebugLog::log("[accessibility] SDL_ConvertAudio failed: %s", SDL_GetError());
+            SDL_free(cvt.buf);
+            return;
+        }
+        m_mixBuffer.assign(cvt.buf, cvt.buf + cvt.len_cvt);
+        SDL_free(cvt.buf);
+    } else {
+        m_mixBuffer.assign(raw, raw + rawBytes);
+    }
+
+    if (m_mixBuffer.empty())
+        return;
+
+    m_ttsChunk = Mix_QuickLoad_RAW(m_mixBuffer.data(), (Uint32)m_mixBuffer.size());
+    if (!m_ttsChunk) {
+        DebugLog::log("[accessibility] Mix_QuickLoad_RAW failed: %s", Mix_GetError());
+        m_mixBuffer.clear();
+        return;
+    }
+
+    Mix_VolumeChunk(m_ttsChunk, MIX_MAX_VOLUME);
+    m_ttsChannel = Mix_PlayChannel(-1, m_ttsChunk, 0);
+    if (m_ttsChannel < 0)
+        DebugLog::log("[accessibility] Mix_PlayChannel failed: %s", Mix_GetError());
+}
+
+void AccessibilityManager::announceFocus(nxui::Widget* widget, const std::string& context,
+                                         bool forceRepeat) {
+    announce(describeWidget(widget, context), true, forceRepeat);
+}
+
+void AccessibilityManager::announceStructuredFocus(const std::string& context,
+                                                   const std::string& position,
+                                                   const std::string& summary,
+                                                   bool forceRepeat,
+                                                   bool forceContext) {
+    announce(composeStructuredFocus(context, position, summary, forceContext), true, forceRepeat);
+}
+
+std::string AccessibilityManager::describeWidget(nxui::Widget* widget,
+                                                 const std::string& context) {
+    if (!widget)
+        return {};
+
+    std::string summary = widget->accessibilitySummary();
+    if (summary.empty())
+        summary = widget->tag();
+
+    std::string out = composeStructuredFocus(context, {}, summary);
+    if (!m_speakHints) {
+        const std::string hint = widget->accessibilityHint();
+        if (!hint.empty()) {
+            const std::string marker = ". " + hint;
+            if (out.size() >= marker.size() &&
+                out.compare(out.size() - marker.size(), marker.size(), marker) == 0) {
+                out.erase(out.size() - marker.size());
+            }
+        }
+    }
+    return out;
+}
+
+std::string AccessibilityManager::composeStructuredFocus(const std::string& context,
+                                                         const std::string& position,
+                                                         const std::string& summary,
+                                                         bool forceContext) {
+    std::string spokenContext;
+    if (!context.empty() && (forceContext || m_speakContextEveryFocus || context != m_lastFocusContext))
+        spokenContext = context;
+
+    m_lastFocusContext = context;
+
+    std::string out = joinSentence(spokenContext, summary);
+    out = joinSentence(out, position);
+    return out;
+}

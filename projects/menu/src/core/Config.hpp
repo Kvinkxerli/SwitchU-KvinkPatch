@@ -1,0 +1,104 @@
+#pragma once
+#include "core/AppLayoutMode.hpp"
+#include <cstdint>
+#include <limits>
+#include <string>
+#include <utility>
+#include <vector>
+
+struct AppConfig {
+    bool  musicEnabled = true;
+    float musicVolume  = 0.4f;
+    float sfxVolume    = 0.7f;
+    int   musicTrackIndex = 0;
+    // Stable id ("track.mp3" or "Album/track.mp3"). Preferred over musicTrackIndex
+    // when users add/remove/reorder files between boots.
+    std::string musicTrackKey;
+    float musicPositionSeconds = 0.f;
+    bool  musicShuffle = false;
+    int   musicRepeatMode = 1; // MusicRepeatMode::All
+    std::vector<std::string> musicPlaylistOrder;
+    int   gridColumns  = 5;
+    int   gridRows     = 3;
+    AppLayoutMode appLayoutMode = AppLayoutMode::Grid;
+    std::string actionHintStyle = "capsules";
+    // 0 = animated translation, 1 = immediate jump.
+    int cursorMotionMode = 0;
+    // 0 = pages slide sideways, 1 = pages swap instantly.
+    int pageTransitionMode = 0;
+    std::string uiLanguageOverride = "auto";
+    std::string soundPreset = "wiiu";
+    bool  defaultProfileEnabled = false;
+    std::string defaultProfileUid;
+    bool  tutorialCompleted = false;
+    bool  clockUse12Hour = false;
+    // Alternate to Nintendo auto clock correction: HTTPS Date sync on boot.
+    bool  webClockSyncEnabled = false;
+    bool  accessibilityEnabled = true;
+    bool  accessibilitySpeakHints = true;
+    bool  accessibilitySpeakContextEveryFocus = false;
+    bool  accessibilitySpeakPosition = true;
+    int   accessibilitySpeechRate = 190;
+    bool  steamGridDbEnabled = true;
+    // Sub-toggles used when steamGridDbEnabled is on. Defaults keep prior
+    // behaviour (artwork everywhere the focused title allows).
+    bool  steamGridDbShowInGrid = true;
+    bool  steamGridDbShowInDynamicLine = true;
+    bool  steamGridDbShowInFolders = true;
+    std::string steamGridDbApiKey;
+
+    // 0 keeps the hand-made layout. The other modes are display-only
+    // projections and never overwrite layout.json.
+    int sortMode = 0;
+    // A-Z / Recent also reorder applications that use a larger tile size.
+    bool sortLargeTiles = true;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> lastOpened;
+    std::uint64_t lastOpenedSequence = 0;
+
+    std::uint64_t lastOpenedAt(std::uint64_t titleId) const {
+        for (const auto& entry : lastOpened)
+            if (entry.first == titleId) return entry.second;
+        return 0;
+    }
+    void noteOpened(std::uint64_t titleId) {
+        for (const auto& entry : lastOpened)
+            lastOpenedSequence = std::max(lastOpenedSequence, entry.second);
+        if (lastOpenedSequence != std::numeric_limits<std::uint64_t>::max())
+            ++lastOpenedSequence;
+        for (auto& entry : lastOpened) {
+            if (entry.first == titleId) {
+                entry.second = lastOpenedSequence;
+                return;
+            }
+        }
+        lastOpened.emplace_back(titleId, lastOpenedSequence);
+    }
+
+    std::string themePreset = "Default Light";
+    // See switchu::folders::kFolderStyle*. Applies to every folder tile.
+    int folderStyle = 0;
+    // First-game icon overlay. Ignored by Classic (the mosaic is the cover).
+    bool folderShowCover = false;
+
+    // Automatic day/night theme switching.
+    std::string autoThemeMode = "off";       // "off" | "manual" | "geo"
+    std::string autoThemeDayPreset;          // preset id/name used during the day
+    std::string autoThemeNightPreset;        // preset id/name used during the night
+    int         autoThemeDayStartHour = 7;   // manual boundary [0..23]
+    int         autoThemeNightStartHour = 19;// manual boundary [0..23]
+    // Cached IP-geolocated position for the geolocation mode.
+    bool        autoThemeGeoResolved = false;
+    double      autoThemeGeoLat = 0.0;       // degrees, north positive
+    double      autoThemeGeoLon = 0.0;       // degrees, east positive
+    std::string autoThemeGeoCity;            // human-readable resolved location
+
+    bool load();
+
+    bool save() const;
+
+    static constexpr const char* kConfigDir  = "sdmc:/config/SwitchU";
+    static constexpr const char* kConfigPath = "sdmc:/config/SwitchU/settings.json";
+    // The copy that was current before the last save. Read only when the live
+    // settings file is missing or does not parse.
+    static constexpr const char* kBackupPath = "sdmc:/config/SwitchU/settings.json.bak";
+};
